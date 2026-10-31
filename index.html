@@ -7,10 +7,7 @@
 
   <!--
   =====================================================================
-   WORLDPANEL – DATA VALIDATION TEAM HUB (bản 1 file duy nhất)
-   - Không cần cài Node.js / npm. Chỉ cần đưa file này lên GitHub Pages.
-   - Muốn sửa: sửa file này, rồi dán đè lên GitHub.
-   - Cấu hình Firebase: tìm "FIREBASE_CONFIG" bên dưới.
+   WORLDPANEL – DATA VALIDATION TEAM HUB
   =====================================================================
   -->
 
@@ -511,6 +508,7 @@ function Dashboard({ me, authUser }) {
   const [filterPeriod, setFilterPeriod] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [onlyMine, setOnlyMine] = useState(false);
+  const [projectScope, setProjectScope] = useState('MY');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
 
@@ -568,85 +566,6 @@ function Dashboard({ me, authUser }) {
     return () => { u1(); u2(); u3(); };
   }, []);
 
-  // Audit Log: chỉ subscribe cho Admin; quyền thực tế phải được kiểm soát bởi Firestore Rules.
-  useEffect(() => {
-    if (me.role !== 'Admin') return;
-    return onSnapshot(collection(db, 'auditLogs'), snap => {
-      setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error('Audit:', err));
-  }, [me.role]);
-
-  const stamp = (value) => value?.seconds !== undefined ? `${value.seconds}:${value.nanoseconds || 0}` : (value ?? null);
-  const editVersions = useRef({});
-  const rememberVersion = (kind, item) => { editVersions.current[`${kind}/${item.id}`] = stamp(item.updatedAt); };
-  const guardedUpdate = async (kind, item, patch, action = 'UPDATE') => {
-    const key = `${kind}/${item.id}`;
-    const original = editVersions.current[key] ?? stamp(item.updatedAt);
-    await runTransaction(db, async tx => {
-      const ref = doc(db, kind, item.id);
-      const snap = await tx.get(ref);
-      if (!snap.exists()) throw new Error('Bản ghi đã bị xóa. Vui lòng tải lại.');
-      if (stamp(snap.data().updatedAt) !== original) throw new Error('Dữ liệu đã được người khác thay đổi. Vui lòng đóng và mở lại để tránh ghi đè.');
-      const audit = doc(collection(db, 'auditLogs'));
-      tx.update(ref, { ...patch, updatedAt: serverTimestamp(), updatedBy: me.id });
-      tx.set(audit, { action, kind, itemId: item.id, actorId: me.id, at: serverTimestamp(), before: snap.data(), changes: patch });
-    });
-  };
-
-  // JSON giữ nguyên ID document và Timestamp để có thể khôi phục liên kết.
-  const backupData = async () => {
-    if (!isAdmin) return;
-    await run(async () => {
-      const collections = {};
-      for (const name of ['users', 'projects', 'tasks']) {
-        const snap = await getDocs(collection(db, name));
-        collections[name] = snap.docs.map(d => ({ id: d.id, data: d.data() }));
-      }
-      const payload = { format: 'dv-team-hub-v1', savedAt: new Date().toISOString(), collections };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `DV_Team_Hub_Backup_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-      a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }, 'Đã xuất Backup', 'Hãy lưu file JSON ở nơi an toàn.');
-  };
-
-  // Restore an toàn: chỉ thêm/cập nhật dữ liệu; không xóa dữ liệu phát sinh sau Backup.
-  // Vì vậy đây là chế độ khôi phục không phá hủy, KHÔNG phải quay về snapshot tuyệt đối.
-  const restoreData = async event => {
-    if (!isAdmin) return;
-    const file = event.target.files?.[0]; event.target.value = '';
-    if (!file) return;
-    try {
-      const payload = JSON.parse(await file.text());
-      const groups = payload.collections;
-      if (payload.format !== 'dv-team-hub-v1' || !groups ||
-          !['users', 'projects', 'tasks'].every(k => Array.isArray(groups[k]))) throw Error('File Backup không đúng định dạng.');
-      const counts = ['users', 'projects', 'tasks'].map(k => `${k}: ${groups[k].length}`).join(', ');
-      if (!window.confirm(`File ${payload.savedAt || ''}\n${counts}\n\nKhôi phục Project/Request/User từ file? Bản ghi không có trong file sẽ giữ nguyên. Chỉ dùng khi cần phục hồi dữ liệu.`)) return;
-      await run(async () => {
-        const rows = ['users', 'projects', 'tasks'].flatMap(kind => groups[kind].map(row => ({ kind, row })));
-        for (const {kind, row} of rows) {
-          if (!row || typeof row.id !== 'string' || !row.id || !row.data || typeof row.data !== 'object' || Array.isArray(row.data)) throw Error('File có bản ghi không hợp lệ.');
-        }
-        const decode = v => {
-          if (Array.isArray(v)) return v.map(decode);
-          if (v && typeof v === 'object') {
-            if (Number.isInteger(v.seconds) && Number.isInteger(v.nanoseconds) && Object.keys(v).length === 2) return new Timestamp(v.seconds, v.nanoseconds);
-            return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, decode(x)]));
-          }
-          return v;
-        };
-        for (let i = 0; i < rows.length; i += 350) {
-          const batch = writeBatch(db);
-          rows.slice(i, i + 350).forEach(({kind, row}) => batch.set(doc(db, kind, row.id), decode(row.data)));
-          await batch.commit();
-        }
-        await addDoc(collection(db, 'auditLogs'), { action: 'RESTORE', kind: 'backup', actorId: me.id, at: serverTimestamp(), savedAt: payload.savedAt, counts });
-      }, 'Đã nhập dữ liệu', 'Kiểm tra lại Project, Request và tài khoản.');
-    } catch (err) { notify('Không thể khôi phục', err.message || String(err), 'error'); }
-  };
-
   // "Hôm nay" tự cập nhật khi qua ngày mới (không cần F5)
   useEffect(() => {
     const t = setInterval(() => {
@@ -661,7 +580,12 @@ function Dashboard({ me, authUser }) {
     () => [...projects].sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')) || String(a.name).localeCompare(String(b.name))),
     [projects]
   );
-  const activeProject = sortedProjects.find((p) => p.id === selectedProjectId) || sortedProjects[0] || null;
+  const myProjectIds = useMemo(() => new Set([
+    ...projects.filter(p => p.createdBy === me.id || (p.memberIds || []).includes(me.id)).map(p => p.id),
+    ...tasks.filter(t => t.requesterId === me.id || t.handlerId === me.id).map(t => t.projectId)
+  ]), [projects, tasks, me.id]);
+  const displayedProjects = projectScope === 'ALL' ? sortedProjects : sortedProjects.filter(p => myProjectIds.has(p.id));
+  const activeProject = displayedProjects.find(p => p.id === selectedProjectId) || displayedProjects[0] || null;
 
   useEffect(() => {
     if (activeProject) localStorage.setItem('wp_selected_project', activeProject.id);
@@ -788,17 +712,20 @@ function Dashboard({ me, authUser }) {
   const openCreateProject = () =>
     setProjectModal({
       mode: 'create', id: '', name: '', code: '', market: 'Vietnam',
-      startDate: nextWorkingDay(today), weekCodes: ['', '', '', ''], weekSubtitles: ['', '', '', ''], error: ''
+      startDate: nextWorkingDay(today), weekCodes: ['', '', '', ''], weekSubtitles: ['', '', '', ''], memberIds: [], error: ''
     });
 
+  const openedVersions = useRef({});
+  const version = v => v?.seconds !== undefined ? `${v.seconds}:${v.nanoseconds || 0}` : null;
+  const remember = (kind, item) => { openedVersions.current[`${kind}/${item.id}`] = version(item.updatedAt); };
   const openEditProject = (proj, e) => {
     if (e) e.stopPropagation();
     if (!canManageProject(proj)) return;
-    rememberVersion('projects', proj);
+    remember('projects', proj);
     setProjectModal({
       mode: 'edit', id: proj.id, name: proj.name || '', code: proj.code || '', market: proj.market || '',
       startDate: proj.startDate || today, weekCodes: getProjectWeekCodes(proj),
-      weekSubtitles: getProjectWeekCodes(proj).map((_,i) => proj.weekSubtitles?.[i] || ''), error: ''
+      weekSubtitles: getProjectWeekCodes(proj).map((_,i) => proj.weekSubtitles?.[i] || ''), memberIds: proj.memberIds || [], error: ''
     });
   };
 
@@ -808,8 +735,17 @@ function Dashboard({ me, authUser }) {
     setProjectModal({ ...projectModal, [field]: arr, error: '' });
   };
 
-  const addWeek = () => setProjectModal(m => ({...m, weekCodes: [...m.weekCodes, nextWeekCode(m.weekCodes.at(-1))], weekSubtitles: [...m.weekSubtitles, ''], error: ''}));
+  const addWeek = () => setProjectModal(m => ({...m, weekCodes: [...m.weekCodes, nextWeekCode(m.weekCodes[m.weekCodes.length - 1])], weekSubtitles: [...m.weekSubtitles, ''], error: ''}));
   const removeWeek = () => setProjectModal(m => m.weekCodes.length <= 4 ? m : ({...m, weekCodes: m.weekCodes.slice(0,-1), weekSubtitles: m.weekSubtitles.slice(0,-1), error: ''}));
+  const guardedUpdate = async (kind, id, data, action='UPDATE') => runTransaction(db, async tx => {
+    const ref = doc(db, kind, id), snap = await tx.get(ref);
+    if (!snap.exists()) throw Error('Bản ghi đã bị xóa.');
+    const expected = openedVersions.current[`${kind}/${id}`];
+    if (expected !== version(snap.data().updatedAt)) throw Error('Dữ liệu đã thay đổi bởi người khác. Hãy đóng và mở lại trước khi lưu.');
+    const audit = doc(collection(db, 'auditLogs'));
+    tx.update(ref, {...data, updatedAt: serverTimestamp(), updatedBy: me.id});
+    tx.set(audit, { actorId: me.id, action, kind, itemId: id, before: snap.data(), changes: data, at: serverTimestamp() });
+  });
   const handleSaveProject = async (e) => {
     e.preventDefault();
     const m = projectModal;
@@ -827,13 +763,14 @@ function Dashboard({ me, authUser }) {
       startDate: nextWorkingDay(m.startDate),
       weekCodes: codes,
       weekSubtitles: m.weekSubtitles.map((s) => s.trim()),
+      memberIds: Array.from(new Set([me.id, ...(m.memberIds || [])])),
       updatedAt: serverTimestamp(),
       updatedBy: me.id
     };
 
     if (m.mode === 'create') {
       const ref = await run(
-        () => addDoc(collection(db, 'projects'), { ...data, createdBy: me.id, createdAt: serverTimestamp() }),
+        async () => { const ref=doc(collection(db,'projects')); const batch=writeBatch(db); batch.set(ref,{...data,createdBy:me.id,createdAt:serverTimestamp()}); batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'CREATE',kind:'projects',itemId:ref.id,at:serverTimestamp()}); await batch.commit(); return ref; },
         'Đã tạo dự án', `Dự án "${data.name}" đã sẵn sàng.`
       );
       if (ref) {
@@ -842,7 +779,7 @@ function Dashboard({ me, authUser }) {
         setFilterPeriod('ALL');
       }
     } else {
-      const ok = await run(() => guardedUpdate('projects', projects.find(p => p.id === m.id), data), 'Đã lưu dự án', `Đã cập nhật "${data.name}".`);
+      const ok = await run(() => guardedUpdate('projects', m.id, data), 'Đã lưu dự án', `Đã cập nhật "${data.name}".`);
       if (ok) setProjectModal(null);
     }
   };
@@ -853,8 +790,6 @@ function Dashboard({ me, authUser }) {
     const related = tasks.filter((t) => t.projectId === proj.id);
     if (!window.confirm(`Xóa dự án "${proj.name}" và ${related.length} request bên trong?\nThao tác này không thể hoàn tác.`)) return;
     await run(async () => {
-      const current = await getDoc(doc(db, 'projects', proj.id));
-      if (!current.exists() || stamp(current.data().updatedAt) !== stamp(proj.updatedAt)) throw Error('Dự án đã thay đổi. Hãy tải lại trước khi xóa.');
       for (let i = 0; i < related.length; i += 450) {
         const batch = writeBatch(db);
         related.slice(i, i + 450).forEach((t) => batch.delete(doc(db, 'tasks', t.id)));
@@ -862,6 +797,7 @@ function Dashboard({ me, authUser }) {
       }
       const batch = writeBatch(db);
       batch.delete(doc(db, 'projects', proj.id));
+      batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'DELETE',kind:'projects',itemId:proj.id,at:serverTimestamp()});
       await batch.commit();
     }, 'Đã xóa dự án', `Đã xóa "${proj.name}".`);
   };
@@ -880,6 +816,7 @@ function Dashboard({ me, authUser }) {
       tx.set(newRef, {
         ...data, code: c, createdBy: me.id, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.id
       });
+      tx.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'CREATE',kind:'tasks',itemId:newRef.id,at:serverTimestamp()});
       return c;
     });
     return { id: newRef.id, code };
@@ -937,7 +874,7 @@ function Dashboard({ me, authUser }) {
   }, [detailId, tasks, loaded.tasks]);
 
   const openDetail = (task) => {
-    rememberVersion('tasks', task);
+    remember('tasks', task);
     setDetailId(task.id);
     setDraft(pickEditable(task));
   };
@@ -960,7 +897,7 @@ function Dashboard({ me, authUser }) {
   const saveDetail = async () => {
     if (!detailTask || !canEditTask(detailTask) || draftError || !isDirty) return;
     const ok = await run(
-      () => guardedUpdate('tasks', detailTask, {
+      () => guardedUpdate('tasks', detailTask.id, {
         ...draft, name: draft.name.trim(), note: String(draft.note || '').trim(),
         updatedAt: serverTimestamp(), updatedBy: me.id
       }),
@@ -974,10 +911,10 @@ function Dashboard({ me, authUser }) {
 
   const toggleComplete = async (task) => {
     if (!canEditTask(task)) return;
-    rememberVersion('tasks', task);
+    remember('tasks', task);
     const done = !task.isCompleted;
     const ok = await run(
-      () => guardedUpdate('tasks', task, {
+      () => guardedUpdate('tasks', task.id, {
         isCompleted: done, stage: done ? 'Completed' : 'In Progress', completedDate: done ? today : null,
         updatedAt: serverTimestamp(), updatedBy: me.id
       }),
@@ -993,6 +930,7 @@ function Dashboard({ me, authUser }) {
     const ok = await run(async () => {
       const batch = writeBatch(db);
       batch.delete(doc(db, 'tasks', task.id));
+      batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'DELETE',kind:'tasks',itemId:task.id,at:serverTimestamp()});
       await batch.commit();
     }, 'Đã xóa request', `[${task.code}] ${task.name}`);
     if (ok && detailId === task.id) {
@@ -1039,6 +977,57 @@ function Dashboard({ me, authUser }) {
     URL.revokeObjectURL(url);
     notify('Đã xuất file', `Đã tải ${rows.length} request ra file CSV (mở bằng Excel).`, 'success');
   };
+
+
+  // Backup JSON chỉ dành cho Admin. JSON lưu ID để bảo toàn liên kết.
+  const backupData = async () => {
+    if (!isAdmin) return;
+    await run(async () => {
+      const groups = {};
+      for (const kind of ['users','projects','tasks']) {
+        const snap = await getDocs(collection(db, kind));
+        groups[kind] = snap.docs.map(d => ({id:d.id,data:d.data()}));
+      }
+      const payload = { format:'dv-team-hub-v1', savedAt:new Date().toISOString(), groups };
+      const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href=url; a.download=`DV_Team_Hub_Backup_${new Date().toISOString().replace(/[:.]/g,'-')}.json`; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    },'Đã xuất Backup','Lưu file JSON ở nơi an toàn.');
+  };
+  const restoreData = async e => {
+    if (!isAdmin) return;
+    const file=e.target.files?.[0]; e.target.value=''; if(!file)return;
+    try {
+      const backup=JSON.parse(await file.text());
+      if(backup.format!=='dv-team-hub-v1'||!backup.groups||!['users','projects','tasks'].every(k=>Array.isArray(backup.groups[k]))) throw Error('File không đúng định dạng.');
+      const rows=['users','projects','tasks'].flatMap(kind=>backup.groups[kind].map(row=>({kind,row})));
+      if(rows.some(({row})=>!row||typeof row.id!=='string'||!row.id||!row.data||typeof row.data!=='object'||Array.isArray(row.data)))throw Error('Có bản ghi không hợp lệ.');
+      const counts=['users','projects','tasks'].map(k=>`${k}: ${backup.groups[k].length}`).join(', ');
+      if(!window.confirm(`Backup ${backup.savedAt || ''}\n${counts}\n\nKhôi phục các bản ghi này? Dữ liệu hiện tại không có trong backup sẽ được giữ nguyên.`))return;
+      const decode=v=>{
+        if(Array.isArray(v))return v.map(decode);
+        if(v&&typeof v==='object'){
+          if(Number.isInteger(v.seconds)&&Number.isInteger(v.nanoseconds)&&Object.keys(v).length===2)return new Timestamp(v.seconds,v.nanoseconds);
+          return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,decode(x)]));
+        }
+        return v;
+      };
+      await run(async()=>{
+        // Không xóa bản ghi ngoài backup, ưu tiên cứu dữ liệu khi database bị mất.
+        for(let i=0;i<rows.length;i+=350){
+          const batch=writeBatch(db);
+          rows.slice(i,i+350).forEach(({kind,row})=>batch.set(doc(db,kind,row.id),decode(row.data)));
+          await batch.commit();
+        }
+        await addDoc(collection(db,'auditLogs'),{actorId:me.id,action:'RESTORE',kind:'backup',at:serverTimestamp(),savedAt:backup.savedAt,counts});
+      },'Đã khôi phục','Kiểm tra lại dữ liệu và liên kết User.');
+    }catch(err){notify('Restore không thành công',err.message||String(err),'error');}
+  };
+  useEffect(()=>{
+    if(!isAdmin)return;
+    return onSnapshot(collection(db,'auditLogs'),snap=>setAuditLogs(snap.docs.map(d=>({id:d.id,...d.data()}))),err=>console.error('Audit:',err));
+  },[isAdmin]);
 
   // ---------------- QUẢN LÝ USER (ADMIN) ----------------
   const countActiveAdmins = (list) => list.filter((u) => u.role === 'Admin' && u.active !== false).length;
@@ -1188,18 +1177,22 @@ function Dashboard({ me, authUser }) {
 
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
           <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-teal-300/80">
-            Danh sách Dự án ({sortedProjects.length})
+            Danh sách Dự án ({displayedProjects.length})
+            <select value={projectScope} onChange={e=>setProjectScope(e.target.value)} className="ml-2 text-slate-900 rounded px-1"><option value="MY">My Projects</option><option value="ALL">All Projects</option></select>
+            <select aria-label="Bộ lọc dự án" value={projectScope} onChange={e => setProjectScope(e.target.value)} className="ml-2 rounded bg-white text-[#004A52] px-2 py-1 text-xs font-bold">
+              <option value="MY">My Projects</option><option value="ALL">All Projects</option>
+            </select>
           </div>
 
-          {sortedProjects.length === 0 && (
+          {displayedProjects.length === 0 && (
             <div className="px-2 py-4 text-[11px] text-teal-100/80">Chưa có dự án nào. Bấm “Tạo Dự Án Mới” để bắt đầu.</div>
           )}
 
-          {sortedProjects.map((proj) => {
+          {displayedProjects.map((proj) => {
             const isSelected = proj.id === activeProject?.id;
             const codes = getProjectWeekCodes(proj);
             const info = getProjectDoneCount(proj.id);
-            const pDays = buildWorkingDays(proj.startDate, codes.length * DAYS_PER_WEEK);
+            const pDays = buildWorkingDays(proj.startDate, getProjectWeekCodes(proj).length * DAYS_PER_WEEK);
             const pct = info.total ? Math.round((info.done / info.total) * 100) : 0;
             return (
               <div
@@ -1313,7 +1306,7 @@ function Dashboard({ me, authUser }) {
                 </div>
                 <p className="text-xs text-slate-500 mt-1 flex items-center gap-3 flex-wrap">
                   <span>
-                    {calendarGrid.weeks.length} week × 5 ngày làm việc ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks.at(-1)?.label}):{' '}
+                    {calendarGrid.weeks.length} week × 5 ngày làm việc ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks[calendarGrid.weeks.length - 1]?.label}):{' '}
                     <strong>{formatShortDate(calendarGrid.startIso)}</strong> đến <strong>{formatShortDate(calendarGrid.endIso)}</strong>
                   </span>
                   <span>•</span>
@@ -1338,11 +1331,11 @@ function Dashboard({ me, authUser }) {
                   <Download size={15} className="text-[#007A86]" /> Xuất Excel
                 </button>
                 {isAdmin && <>
-                  <button onClick={backupData} disabled={busy} className="px-3 py-2 rounded-xl border border-teal-200 bg-teal-50 text-teal-900 text-xs font-bold">Backup JSON</button>
-                  <label className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs font-bold cursor-pointer">Restore JSON
-                    <input type="file" accept=".json,application/json" className="hidden" onChange={restoreData} />
+                  <button onClick={backupData} disabled={busy} className="px-3 py-2 rounded-xl border border-teal-200 text-xs font-bold">Backup JSON</button>
+                  <label className="px-3 py-2 rounded-xl border border-amber-200 text-xs font-bold cursor-pointer">Restore JSON
+                    <input type="file" accept=".json,application/json" className="hidden" onChange={restoreData}/>
                   </label>
-                  <button onClick={() => setShowAudit(true)} className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold">Audit Log</button>
+                  <button onClick={()=>setShowAudit(true)} className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold">Audit Log</button>
                 </>}
                 {isAdmin && (
                   <button
@@ -1453,7 +1446,7 @@ function Dashboard({ me, authUser }) {
                 <div className="flex border-b border-white/20 bg-[#138A9C] text-white text-xs font-extrabold">
                   <div className="w-[380px] shrink-0 px-4 py-2.5 bg-[#004A52] border-r border-white/20 flex items-center justify-between">
                     <span className="flex items-center gap-2 text-[#FFD61F]">
-                      <Calendar size={15} /> LỊCH PANEL ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks.at(-1)?.label})
+                      <Calendar size={15} /> LỊCH PANEL ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks[calendarGrid.weeks.length - 1]?.label})
                     </span>
                     <span className="text-[10px] text-teal-200 font-semibold">5 ngày / week</span>
                   </div>
@@ -1872,14 +1865,13 @@ function Dashboard({ me, authUser }) {
 
       {isAdmin && showAudit && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
         <div className="bg-white rounded-xl p-5 w-full max-w-4xl max-h-[85vh] overflow-auto">
-          <div className="flex justify-between items-center mb-4"><h2 className="font-bold text-lg">Audit Log (Admin)</h2><button onClick={() => setShowAudit(false)}>Đóng ✕</button></div>
-          <div className="space-y-2 text-xs">{[...auditLogs].sort((a,b) => (b.at?.seconds || 0) - (a.at?.seconds || 0)).slice(0, 300).map(log => <div key={log.id} className="border rounded-lg p-3 break-words">
-            <b>{log.action}</b> | {log.kind}/{log.itemId || ''} | {users.find(u => u.id === log.actorId)?.name || log.actorId} | {log.at?.toDate?.().toLocaleString('vi-VN') || ''}
-            <details><summary>Chi tiết thay đổi</summary><pre className="whitespace-pre-wrap">{JSON.stringify({ before: log.before, changes: log.changes }, null, 2)}</pre></details>
-          </div>)}</div>
+          <div className="flex justify-between mb-4"><h2 className="font-bold text-lg">Audit Log</h2><button onClick={()=>setShowAudit(false)}>Đóng ✕</button></div>
+          {[...auditLogs].sort((a,b)=>(b.at?.seconds||0)-(a.at?.seconds||0)).slice(0,300).map(log=><div key={log.id} className="border rounded-lg p-3 text-xs mb-2">
+            <b>{log.action}</b> | {log.kind}/{log.itemId||''} | {users.find(u=>u.id===log.actorId)?.name||log.actorId} | {log.at?.toDate?.().toLocaleString('vi-VN')||''}
+            <details><summary>Chi tiết</summary><pre className="whitespace-pre-wrap break-words">{JSON.stringify({before:log.before,changes:log.changes},null,2)}</pre></details>
+          </div>)}
         </div>
       </div>}
-
       {/* ==================== MODAL: TẠO / SỬA DỰ ÁN ==================== */}
       {projectModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -1942,6 +1934,16 @@ function Dashboard({ me, authUser }) {
               </div>
 
               <div>
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <div className="font-bold mb-2">Người tham gia Project</div>
+                  <div className="text-slate-500 text-[11px] mb-2">Người tạo luôn được tham gia. User được giao Request cũng xuất hiện trong My Projects.</div>
+                  <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                    {activeUsers.map(u => <label key={u.id} className="flex items-center gap-2 text-xs">
+                      <input type="checkbox" disabled={u.id === me.id} checked={u.id === me.id || (projectModal.memberIds || []).includes(u.id)}
+                        onChange={e => setProjectModal(m => ({...m, memberIds: e.target.checked ? [...(m.memberIds || []),u.id] : (m.memberIds || []).filter(id => id !== u.id)}))}/>{u.name}
+                    </label>)}
+                  </div>
+                </div>
                 <label className="font-bold text-slate-700 block mb-1.5">Mã P%W% & Tên Phase cho {projectModal.weekCodes.length} week *</label>
                 <div className="border border-slate-200 rounded-xl overflow-hidden">
                   <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-slate-100 text-[10px] font-bold uppercase tracking-wide text-slate-500">
