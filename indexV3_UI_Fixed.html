@@ -1,0 +1,2343 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WORLDPANEL – Data Validation Team Hub</title>
+
+  <!--
+  =====================================================================
+   WORLDPANEL – DATA VALIDATION TEAM HUB
+  =====================================================================
+  -->
+
+  <!-- Giao diện (Tailwind CSS) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Trình dịch JSX ngay trên trình duyệt -->
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+  <!-- Địa chỉ các thư viện (React, icon, Firebase) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?external=react",
+      "lucide-react": "https://esm.sh/lucide-react@0.453.0?external=react",
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+      "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+    }
+  }
+  </script>
+
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
+    #boot { min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: linear-gradient(135deg, #004A52, #007A86); color: #fff; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="root"><div id="boot">Đang mở ứng dụng...</div></div>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  PlusCircle, Search, Calendar, CheckCircle2, PlayCircle, Lock, Unlock, LogOut, Shield, Users,
+  FolderPlus, Bell, X, Trash2, Edit3, Settings, Clock, ChevronRight, Check, KeyRound, Filter,
+  Download, AlertTriangle, UserX, UserCheck, Save, Copy, User, Loader2, Mail, LogIn, RefreshCw
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, initializeAuth, inMemoryPersistence,
+  onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail,
+  createUserWithEmailAndPassword, updatePassword, reauthenticateWithCredential, EmailAuthProvider
+} from 'firebase/auth';
+import {
+  initializeFirestore, Timestamp, collection, doc, getDoc, getDocs, onSnapshot, addDoc, setDoc, updateDoc, writeBatch, runTransaction, serverTimestamp
+} from 'firebase/firestore';
+
+// =====================================================================
+// FIREBASE_CONFIG – cấu hình dự án dv-team-hub (không phải mật khẩu)
+// =====================================================================
+const firebaseConfig = {
+  apiKey: 'AIzaSyBylytq8WUA3iwjIw-a-pCHZUB4oQQasHs',
+  authDomain: 'dv-team-hub.firebaseapp.com',
+  projectId: 'dv-team-hub',
+  storageBucket: 'dv-team-hub.firebasestorage.app',
+  messagingSenderId: '293535954505',
+  appId: '1:293535954505:web:57ec89145bfe9c4427b198'
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+// Tự chuyển sang long-polling nếu mạng công ty chặn kết nối streaming
+const db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+// App phụ: Admin dùng để tạo tài khoản cho nhân viên mà không bị đăng xuất
+const secondaryApp = initializeApp(firebaseConfig, 'secondary');
+const secondaryAuth = initializeAuth(secondaryApp, { persistence: inMemoryPersistence });
+
+// --- DANH SÁCH CÁC TEAM CỦA CÔNG TY ---
+const TEAMS = ['OP', 'CS', 'PD', 'PE', 'DV', 'PR', 'DQ', 'Management'];
+
+// --- LOẠI CÔNG VIỆC (sửa danh sách này nếu cần) ---
+const CATEGORIES = ['XML Scripting', 'Panelist Data', 'Webitem Banner', 'QC Validation', 'Sync & Report', 'Dictionary / Barcode', 'Khác'];
+
+const MARKETS = ['Vietnam', 'Indonesia', 'Malaysia', 'Thailand', 'Philippines', 'Singapore'];
+
+// =====================================================================
+// HÀM XỬ LÝ NGÀY THÁNG & LỊCH (4 week x 5 ngày làm việc, bỏ qua T7/CN)
+// =====================================================================
+const DAYS_PER_WEEK = 5;
+const WEEKS_PER_PERIOD = 4;
+const TOTAL_DAYS = DAYS_PER_WEEK * WEEKS_PER_PERIOD;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_NAMES_VN = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+
+const formatDateISO = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const getTodayIso = () => formatDateISO(new Date());
+const addDays = (iso, n) => {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return formatDateISO(d);
+};
+const diffDays = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
+const formatShortDate = (iso) => {
+  if (!iso) return '';
+  const p = iso.split('-');
+  return p.length === 3 ? `${p[2]}/${p[1]}` : iso;
+};
+const formatFullVNDate = (iso) => {
+  if (!iso) return '';
+  const p = iso.split('-');
+  return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : iso;
+};
+const formatTimestamp = (ts) => {
+  if (!ts || typeof ts.toDate !== 'function') return '';
+  const d = ts.toDate();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} ${formatFullVNDate(formatDateISO(d))}`;
+};
+const getDayOfWeek = (iso) => new Date(iso + 'T00:00:00').getDay();
+const isWeekendIso = (iso) => [0, 6].includes(getDayOfWeek(iso));
+const nextWorkingDay = (iso) => {
+  let d = iso;
+  while (isWeekendIso(d)) d = addDays(d, 1);
+  return d;
+};
+const buildWorkingDays = (startIso, count = TOTAL_DAYS) => {
+  const list = [];
+  if (!startIso) return list;
+  let d = nextWorkingDay(startIso);
+  while (list.length < count) {
+    if (!isWeekendIso(d)) list.push(d);
+    d = addDays(d, 1);
+  }
+  return list;
+};
+const extractPeriodCode = (weekCode) => {
+  const m = String(weekCode || '').trim().toUpperCase().match(/^P(\d+)/);
+  return m ? `P${parseInt(m[1], 10)}` : '';
+};
+const getProjectWeekCodes = (proj) => {
+  const c = Array.isArray(proj?.weekCodes) ? proj.weekCodes : [];
+  return Array.from({length: Math.max(4, c.length)}, (_,i) => String(c[i] || '').trim().toUpperCase());
+};
+const nextWeekCode = (c) => { const m = String(c || '').match(/^P(\d+)W([1-4])$/i); if (!m) return ''; const p = +m[1], w = +m[2]; return w < 4 ? `P${p}W${w+1}` : `P${p === 13 ? 1 : p+1}W1`; };
+const getWeekLabel = (code, idx) => code || `Week ${idx + 1}`;
+const makeInitials = (name) => {
+  const w = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (w.length === 0) return 'US';
+  if (w.length === 1) return w[0].slice(0, 2).toUpperCase();
+  return (w[0][0] + w[w.length - 1][0]).toUpperCase();
+};
+const codeNumber = (code) => {
+  const n = parseInt(String(code || '').replace(/\D/g, ''), 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+// Lưới lịch 20 cột của 1 dự án
+const buildCalendarGrid = (project, today) => {
+  if (!project) return { startIso: '', endIso: '', weeks: [], days: [] };
+  const codes = getProjectWeekCodes(project);
+  const workDays = buildWorkingDays(project.startDate || today, codes.length * DAYS_PER_WEEK);
+  const weeks = [];
+  const days = [];
+  for (let w = 0; w < codes.length; w++) {
+    const weekCode = codes[w];
+    const label = getWeekLabel(weekCode, w);
+    const periodCode = extractPeriodCode(weekCode);
+    const subtitle = String(project.weekSubtitles?.[w] || '').trim();
+    const weekDays = workDays.slice(w * DAYS_PER_WEEK, (w + 1) * DAYS_PER_WEEK);
+    weeks.push({
+      weekIndex: w, weekCode, periodCode, label, subtitle,
+      fullTitle: subtitle ? `${label} (${subtitle})` : label,
+      firstIso: weekDays[0], lastIso: weekDays[weekDays.length - 1]
+    });
+    weekDays.forEach((dateIso, d) => {
+      const colIndex = w * DAYS_PER_WEEK + d;
+      const prevIso = colIndex > 0 ? workDays[colIndex - 1] : null;
+      days.push({
+        colIndex, weekIndex: w, dateIso, periodCode, weekLabel: label,
+        dayName: DAY_NAMES[getDayOfWeek(dateIso)],
+        shortDate: formatShortDate(dateIso),
+        isToday: dateIso === today,
+        isWeekBoundary: d === DAYS_PER_WEEK - 1,
+        afterWeekendGap: d > 0 && !!prevIso && diffDays(prevIso, dateIso) > 1
+      });
+    });
+  }
+  return { startIso: workDays[0], endIso: workDays[workDays.length - 1], weeks, days };
+};
+
+// Vị trí thanh Gantt, % tiến độ, trễ hạn, tự thu nhỏ...
+const computeTaskMetrics = (task, days, today) => {
+  const hasDeadline = Boolean(task.deadlineDate);
+  const notStarted = diffDays(task.startDate, today) < 0;
+  let endIso = task.startDate;
+  let progress = 0;
+  let label = '';
+
+  if (task.isCompleted) {
+    endIso = hasDeadline ? task.deadlineDate : task.completedDate || task.startDate;
+    if (diffDays(endIso, task.startDate) > 0) endIso = task.startDate;
+    progress = 100;
+    label = `Đã hoàn thành (${formatShortDate(task.completedDate || endIso)})`;
+  } else if (hasDeadline) {
+    endIso = task.deadlineDate;
+    const total = Math.max(1, diffDays(task.startDate, task.deadlineDate) + 1);
+    const elapsed = diffDays(task.startDate, today) + 1;
+    progress = elapsed <= 0 ? 0 : elapsed >= total ? 95 : Math.round((elapsed / total) * 100);
+    label = notStarted ? `Chưa bắt đầu (Hạn: ${formatShortDate(task.deadlineDate)})` : `Theo ngày (Hạn: ${formatShortDate(task.deadlineDate)})`;
+  } else {
+    endIso = notStarted ? task.startDate : today;
+    const running = Math.max(1, diffDays(task.startDate, endIso) + 1);
+    progress = notStarted ? 0 : Math.min(90, running * 15);
+    label = notStarted ? 'Chưa bắt đầu (không có Deadline)' : `Không cố định Deadline (${running} ngày chạy)`;
+  }
+
+  const isOverdue = !task.isCompleted && hasDeadline && diffDays(task.deadlineDate, today) > 0;
+  if (isOverdue) label = `Trễ hạn ${diffDays(task.deadlineDate, today)} ngày (Hạn: ${formatShortDate(task.deadlineDate)})`;
+
+  const last = days.length - 1;
+  const outOfRange =
+    days.length === 0 || diffDays(endIso, days[0].dateIso) > 0 || diffDays(days[last].dateIso, task.startDate) > 0;
+
+  let startIdx = days.findIndex((d) => diffDays(task.startDate, d.dateIso) >= 0);
+  if (startIdx === -1) startIdx = last;
+  let endIdx = -1;
+  for (let i = last; i >= 0; i--) {
+    if (diffDays(days[i].dateIso, endIso) >= 0) { endIdx = i; break; }
+  }
+  if (endIdx < startIdx) endIdx = startIdx;
+
+  return {
+    startCol: startIdx + 1,
+    spanCols: Math.max(1, endIdx - startIdx + 1),
+    progress: Math.max(0, Math.min(100, progress)),
+    label, endIso, isOverdue, outOfRange,
+    // TỰ ĐỘNG THU NHỎ: việc đã hoàn thành. Việc trễ hạn vẫn hiển thị nổi bật (màu đỏ).
+    isReceded: Boolean(task.isCompleted),
+    periods: outOfRange ? [] : Array.from(new Set(days.slice(startIdx, endIdx + 1).map((d) => d.periodCode).filter(Boolean)))
+  };
+};
+
+const getTaskStatus = (task, metrics) => {
+  if (task.isCompleted) return 'DONE';
+  if (metrics.isOverdue) return 'OVERDUE';
+  if (task.stage === 'Pending Approval') return 'PENDING';
+  if (task.stage === 'Need Info') return 'NEEDINFO';
+  return 'ACTIVE';
+};
+
+// Đổi mã lỗi Firebase thành câu dễ hiểu
+const friendlyError = (e) => {
+  const c = e?.code || '';
+  if (c.includes('permission-denied'))
+    return 'Không có quyền truy cập dữ liệu. Kiểm tra lại: đã dán và bấm Publish Rules trên Firestore chưa?';
+  if (c.includes('not-found'))
+    return 'Không tìm thấy cơ sở dữ liệu. Kiểm tra lại: đã tạo Firestore Database với ID là (default) chưa?';
+  if (c.includes('unavailable') || c.includes('deadline-exceeded') || c === 'auth/network-request-failed')
+    return 'Không kết nối được Firebase. Kiểm tra mạng (hoặc mạng công ty đang chặn Firebase).';
+  if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-login-credentials'].includes(c))
+    return 'Email hoặc mật khẩu không đúng.';
+  if (c === 'auth/too-many-requests') return 'Nhập sai quá nhiều lần. Vui lòng thử lại sau ít phút.';
+  if (c === 'auth/email-already-in-use')
+    return 'Email này đã có tài khoản Firebase. Nếu là tài khoản cũ đã xóa, vào Firebase Console > Authentication xóa email đó rồi tạo lại.';
+  if (c === 'auth/weak-password') return 'Mật khẩu tối thiểu 6 ký tự.';
+  if (c === 'auth/invalid-email') return 'Email không đúng định dạng.';
+  if (c === 'auth/missing-password') return 'Vui lòng nhập mật khẩu.';
+  if (c === 'auth/requires-recent-login') return 'Vui lòng đăng xuất, đăng nhập lại rồi thử lại.';
+  if (c === 'auth/unauthorized-domain')
+    return 'Tên miền này chưa được cho phép. Vào Firebase > Authentication > Settings > Authorized domains để thêm tên miền.';
+  if (c === 'auth/operation-not-allowed') return 'Chưa bật đăng nhập Email/Password trong Firebase Authentication.';
+  return (c ? `[${c}] ` : '') + (e?.message || 'Có lỗi xảy ra, vui lòng thử lại.');
+};
+
+// =====================================================================
+// MÀN HÌNH PHỤ: Đang tải / Lỗi / Đăng nhập / Không có quyền
+// =====================================================================
+const BrandBlock = () => (
+  <div className="flex items-center gap-2 justify-center mb-1">
+    <div className="w-2.5 h-2.5 rounded-full bg-[#FFD61F]"></div>
+    <h1 className="text-xl font-extrabold tracking-wider text-white">WORLDPANEL</h1>
+  </div>
+);
+
+const CenterCard = ({ children }) => (
+  <div className="min-h-screen bg-gradient-to-br from-[#004A52] via-[#005B66] to-[#007A86] flex items-center justify-center p-4 font-sans">
+    <div className="w-full max-w-md">
+      <BrandBlock />
+      <p className="text-center text-[11px] text-teal-100/90 font-semibold tracking-wide mb-5">DATA VALIDATION TEAM HUB</p>
+      <div className="bg-white rounded-2xl shadow-2xl p-6 text-xs text-slate-700">{children}</div>
+    </div>
+  </div>
+);
+
+// Màn hình chờ: sau 12 giây vẫn chưa xong thì hiện gợi ý xử lý (không xoay mãi)
+const LoadingScreen = ({ text = 'Đang tải dữ liệu...' }) => {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 12000);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <CenterCard>
+      <div className="flex flex-col items-center gap-3 py-6 text-slate-500">
+        <Loader2 size={26} className="animate-spin text-[#007A86]" />
+        <span className="font-semibold">{text}</span>
+        {slow && (
+          <div className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] leading-relaxed text-left w-full">
+            <p className="font-bold mb-1">Tải lâu hơn bình thường. Thử lần lượt:</p>
+            <p>1. Thử phát Wi‑Fi từ điện thoại (mạng công ty có thể chặn Firebase).</p>
+            <p>2. Kiểm tra đã tạo Firestore Database và bấm Publish Rules chưa.</p>
+            <p>3. Bấm F12 → tab Console, chụp dòng màu đỏ gửi người hỗ trợ.</p>
+            <button onClick={() => window.location.reload()} className="mt-2 px-3 py-1.5 rounded-lg bg-[#004A52] text-white font-bold inline-flex items-center gap-1">
+              <RefreshCw size={12} /> Tải lại trang
+            </button>
+          </div>
+        )}
+      </div>
+    </CenterCard>
+  );
+};
+
+const ErrorScreen = ({ title, message }) => (
+  <CenterCard>
+    <h2 className="text-sm font-extrabold text-red-600 mb-2 flex items-center gap-2">
+      <AlertTriangle size={16} /> {title}
+    </h2>
+    <p className="mb-4 leading-relaxed">{message}</p>
+    <div className="flex gap-2">
+      <button onClick={() => window.location.reload()} className="px-4 py-2 rounded-xl bg-[#004A52] text-white font-bold flex items-center gap-1.5">
+        <RefreshCw size={13} /> Tải lại
+      </button>
+      <button onClick={() => signOut(auth)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-bold flex items-center gap-1.5">
+        <LogOut size={13} /> Đăng xuất
+      </button>
+    </div>
+  </CenterCard>
+);
+
+const LoginScreen = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError(''); setInfo(''); setBusy(true);
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleForgot = async () => {
+    setError(''); setInfo('');
+    if (!email.trim()) return setError('Nhập email của bạn trước, rồi bấm "Quên mật khẩu".');
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setInfo('Đã gửi email đặt lại mật khẩu (nếu email có trong hệ thống). Kiểm tra cả hộp thư Junk/Spam.');
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  };
+
+  return (
+    <CenterCard>
+      <h2 className="text-sm font-extrabold text-[#004A52] mb-1">Đăng nhập</h2>
+      <p className="text-slate-500 mb-4">Dùng email công ty và mật khẩu Admin đã cấp. Hệ thống sẽ ghi nhớ đăng nhập trên máy này.</p>
+      <form onSubmit={handleLogin} className="space-y-2.5">
+        {error && <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold">{error}</div>}
+        {info && <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-200 font-semibold">{info}</div>}
+        <input
+          type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email công ty" autoComplete="username"
+          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-[#007A86]"
+        />
+        <input
+          type="password" required value={password} onChange={(e) => setPassword(e.target.value)}
+          placeholder="Mật khẩu" autoComplete="current-password"
+          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-[#007A86]"
+        />
+        <button
+          type="submit" disabled={busy}
+          className="w-full py-2.5 bg-[#004A52] hover:bg-[#006069] text-white font-bold rounded-xl shadow flex items-center justify-center gap-1.5 disabled:opacity-60"
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />} Đăng nhập
+        </button>
+      </form>
+      <button onClick={handleForgot} className="mt-3 text-[#007A86] font-bold hover:underline flex items-center gap-1">
+        <Mail size={12} /> Quên mật khẩu
+      </button>
+    </CenterCard>
+  );
+};
+
+const NoAccessScreen = ({ email, locked, error }) => (
+  <CenterCard>
+    <h2 className="text-sm font-extrabold text-red-600 mb-2 flex items-center gap-2">
+      <Lock size={16} /> {locked ? 'Tài khoản đã bị khóa' : 'Tài khoản chưa được cấp quyền'}
+    </h2>
+    <p className="mb-1">Email: <strong>{email}</strong></p>
+    <p className="text-slate-500 mb-4">
+      {locked ? 'Vui lòng liên hệ Admin để mở khóa tài khoản.' : 'Vui lòng liên hệ Admin để được tạo hồ sơ trong hệ thống.'}
+    </p>
+    {error && <p className="text-[11px] text-red-500 mb-3">Chi tiết: {error}</p>}
+    <button onClick={() => signOut(auth)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold flex items-center gap-1.5">
+      <LogOut size={13} /> Đăng xuất
+    </button>
+  </CenterCard>
+);
+
+// =====================================================================
+// APP GỐC: xử lý đăng nhập & hồ sơ người dùng
+// =====================================================================
+function App() {
+  const [authUser, setAuthUser] = useState(undefined); // undefined = đang kiểm tra
+  const [profile, setProfile] = useState(undefined);
+  const [profileError, setProfileError] = useState('');
+
+  useEffect(() => onAuthStateChanged(auth, (u) => {
+    setAuthUser(u);
+    if (!u) setProfile(null);
+  }), []);
+
+  useEffect(() => {
+    if (!authUser) return undefined;
+    setProfile(undefined);
+    setProfileError('');
+    const ref = doc(db, 'users', authUser.uid);
+    let bootstrapTried = false;
+    return onSnapshot(
+      ref,
+      async (snap) => {
+        if (snap.exists()) {
+          setProfile({ id: snap.id, ...snap.data() });
+          return;
+        }
+        if (bootstrapTried) return setProfile(null);
+        bootstrapTried = true;
+        // Hệ thống chưa có Admin -> tài khoản đăng nhập đầu tiên trở thành Admin
+        try {
+          const setupRef = doc(db, 'meta', 'setup');
+          const setup = await getDoc(setupRef);
+          if (setup.exists()) return setProfile(null);
+          const email = (authUser.email || '').toLowerCase();
+          const name = email.split('@')[0] || 'Admin';
+          const batch = writeBatch(db);
+          batch.set(ref, {
+            name, email, dept: 'DV', role: 'Admin', active: true, avatar: makeInitials(name),
+            createdAt: serverTimestamp()
+          });
+          batch.set(setupRef, { adminUid: authUser.uid, createdAt: serverTimestamp() });
+          await batch.commit();
+        } catch (err) {
+          setProfileError(friendlyError(err));
+          setProfile(null);
+        }
+      },
+      (err) => {
+        setProfileError(friendlyError(err));
+        setProfile(null);
+      }
+    );
+  }, [authUser]);
+
+  if (authUser === undefined) return <LoadingScreen text="Đang kiểm tra đăng nhập..." />;
+  if (!authUser) return <LoginScreen />;
+  if (profile === undefined) return <LoadingScreen text="Đang tải hồ sơ..." />;
+  if (!profile) return <NoAccessScreen email={authUser.email} error={profileError} />;
+  if (profile.active === false) return <NoAccessScreen email={authUser.email} locked />;
+  return <Dashboard me={profile} authUser={authUser} />;
+}
+
+// =====================================================================
+// DASHBOARD CHÍNH
+// =====================================================================
+const EDITABLE_FIELDS = ['name', 'category', 'requesterId', 'handlerId', 'stage', 'priority', 'startDate', 'deadlineDate', 'note'];
+const pickEditable = (t) => Object.fromEntries(EDITABLE_FIELDS.map((k) => [k, t[k] ?? '']));
+
+const emptyNewTask = (me, today) => ({
+  name: '', category: CATEGORIES[0], requesterId: me.id, handlerId: me.id,
+  startDate: nextWorkingDay(today), deadlineDate: '', stage: 'In Progress', priority: 'Normal', note: '', error: ''
+});
+
+function Dashboard({ me, authUser }) {
+  // ---------------- DỮ LIỆU TỪ FIREBASE (thời gian thực) ----------------
+  const [users, setUsers] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loaded, setLoaded] = useState({ users: false, projects: false, tasks: false });
+  const [loadError, setLoadError] = useState('');
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [showAudit, setShowAudit] = useState(false);
+
+  // ---------------- TRẠNG THÁI GIAO DIỆN ----------------
+  const [today, setToday] = useState(getTodayIso());
+  const [selectedProjectId, setSelectedProjectId] = useState(() => localStorage.getItem('wp_selected_project') || '');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterDept, setFilterDept] = useState('ALL');
+  const [filterPeriod, setFilterPeriod] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [projectScope, setProjectScope] = useState('MY');
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  // Modals
+  const [projectModal, setProjectModal] = useState(null);
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [newTask, setNewTask] = useState(() => emptyNewTask(me, getTodayIso()));
+  const [detailId, setDetailId] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passForm, setPassForm] = useState({ oldPass: '', newPass: '', confirmPass: '', error: '' });
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
+  const [editingUser, setEditingUser] = useState(null);
+  const [deleteUserData, setDeleteUserData] = useState(null);
+  const [userFormError, setUserFormError] = useState('');
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', dept: 'DV', role: 'Member' });
+
+  const isAdmin = me.role === 'Admin';
+  const allLoaded = loaded.users && loaded.projects && loaded.tasks;
+
+  // ---------------- THÔNG BÁO ----------------
+  const toastTimer = useRef(null);
+  const notify = (title, message, type = 'info') => {
+    setToast({ title, message, type });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), type === 'error' ? 6000 : 4000);
+  };
+  const run = async (fn, okTitle, okMsg) => {
+    setBusy(true);
+    try {
+      const result = await fn();
+      if (okTitle) notify(okTitle, okMsg || '', 'success');
+      return result ?? true;
+    } catch (err) {
+      console.error(err);
+      notify('Không thực hiện được', friendlyError(err), 'error');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ---------------- ĐỒNG BỘ DỮ LIỆU ----------------
+  // Lỗi khi tải -> hiện màn hình lỗi rõ ràng (không xoay "Đang tải" mãi)
+  useEffect(() => {
+    const onErr = (name) => (err) => {
+      console.error(`Lỗi tải ${name}:`, err);
+      setLoadError(friendlyError(err));
+    };
+    const mapDocs = (s) => s.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const u1 = onSnapshot(collection(db, 'users'), (s) => { setUsers(mapDocs(s)); setLoaded((l) => ({ ...l, users: true })); }, onErr('users'));
+    const u2 = onSnapshot(collection(db, 'projects'), (s) => { setProjects(mapDocs(s)); setLoaded((l) => ({ ...l, projects: true })); }, onErr('projects'));
+    const u3 = onSnapshot(collection(db, 'tasks'), (s) => { setTasks(mapDocs(s)); setLoaded((l) => ({ ...l, tasks: true })); }, onErr('tasks'));
+    return () => { u1(); u2(); u3(); };
+  }, []);
+
+  // "Hôm nay" tự cập nhật khi qua ngày mới (không cần F5)
+  useEffect(() => {
+    const t = setInterval(() => {
+      const n = getTodayIso();
+      setToday((prev) => (prev !== n ? n : prev));
+    }, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ---------------- DỮ LIỆU DẪN XUẤT ----------------
+  const sortedProjects = useMemo(
+    () => [...projects].sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')) || String(a.name).localeCompare(String(b.name))),
+    [projects]
+  );
+  const myProjectIds = useMemo(() => new Set([
+    ...projects.filter(p => p.createdBy === me.id || (p.memberIds || []).includes(me.id)).map(p => p.id),
+    ...tasks.filter(t => t.requesterId === me.id || t.handlerId === me.id).map(t => t.projectId)
+  ]), [projects, tasks, me.id]);
+  const displayedProjects = projectScope === 'ALL' ? sortedProjects : sortedProjects.filter(p => myProjectIds.has(p.id));
+  const activeProject = displayedProjects.find(p => p.id === selectedProjectId) || displayedProjects[0] || null;
+
+  useEffect(() => {
+    if (activeProject) localStorage.setItem('wp_selected_project', activeProject.id);
+  }, [activeProject]);
+
+  const usersById = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
+  const getUserById = (id) => usersById[id] || { id, name: 'Đã xóa / Chưa gán', dept: '—', avatar: '??', active: false };
+  const activeUsers = useMemo(
+    () => users.filter((u) => u.active !== false).sort((a, b) => String(a.name).localeCompare(String(b.name))),
+    [users]
+  );
+  const userOptionsFor = (currentId) => {
+    const list = [...activeUsers];
+    const cur = usersById[currentId];
+    if (cur && cur.active === false) list.push(cur);
+    return list;
+  };
+
+  const canManageProject = (proj) => Boolean(proj) && (isAdmin || proj.createdBy === me.id);
+  const canEditTask = (task) => Boolean(task) && (isAdmin || task.requesterId === me.id || task.handlerId === me.id);
+
+  const calendarGrid = useMemo(() => buildCalendarGrid(activeProject, today), [activeProject, today]);
+  const todayColIndex = calendarGrid.days.findIndex((d) => d.dateIso === today);
+
+  const periodOptions = useMemo(() => {
+    const set = new Set(calendarGrid.weeks.map((w) => w.periodCode).filter(Boolean));
+    return ['ALL', ...Array.from(set).sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10))];
+  }, [calendarGrid]);
+  useEffect(() => {
+    if (!periodOptions.includes(filterPeriod)) setFilterPeriod('ALL');
+  }, [periodOptions, filterPeriod]);
+
+  // Request của dự án: sắp xếp theo ngày bắt đầu, sau đó theo mã REQ
+  const allProjectTasks = useMemo(() => {
+    if (!activeProject) return [];
+    return tasks
+      .filter((t) => t.projectId === activeProject.id)
+      .map((t) => {
+        const metrics = computeTaskMetrics(t, calendarGrid.days, today);
+        return { task: t, metrics, status: getTaskStatus(t, metrics) };
+      })
+      .sort((a, b) => String(a.task.startDate).localeCompare(String(b.task.startDate)) || codeNumber(a.task.code) - codeNumber(b.task.code));
+  }, [tasks, activeProject, calendarGrid, today]);
+
+  const statusCounts = useMemo(() => {
+    const c = { ALL: allProjectTasks.length, ACTIVE: 0, PENDING: 0, NEEDINFO: 0, OVERDUE: 0, DONE: 0 };
+    allProjectTasks.forEach((r) => { c[r.status] += 1; });
+    return c;
+  }, [allProjectTasks]);
+
+  const visibleRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return allProjectTasks.filter(({ task: t, metrics, status }) => {
+      const h = getUserById(t.handlerId);
+      const r = getUserById(t.requesterId);
+      const matchSearch = !q || [t.name, t.code, t.category, h.name, r.name].some((v) => String(v || '').toLowerCase().includes(q));
+      const matchDept = filterDept === 'ALL' || h.dept === filterDept || r.dept === filterDept;
+      const matchPeriod = filterPeriod === 'ALL' || metrics.periods.includes(filterPeriod);
+      const matchStatus = filterStatus === 'ALL' || status === filterStatus;
+      const matchMine = !onlyMine || t.handlerId === me.id || t.requesterId === me.id;
+      return matchSearch && matchDept && matchPeriod && matchStatus && matchMine;
+    });
+  }, [allProjectTasks, searchQuery, filterDept, filterPeriod, filterStatus, onlyMine, usersById, me.id]);
+
+  const hasActiveFilter = searchQuery.trim() !== '' || filterDept !== 'ALL' || filterPeriod !== 'ALL' || filterStatus !== 'ALL' || onlyMine;
+  const clearAllFilters = () => {
+    setSearchQuery(''); setFilterDept('ALL'); setFilterPeriod('ALL'); setFilterStatus('ALL'); setOnlyMine(false);
+  };
+
+  const getProjectDoneCount = (pid) => {
+    const list = tasks.filter((t) => t.projectId === pid);
+    return { done: list.filter((t) => t.isCompleted).length, total: list.length };
+  };
+
+  const getBarColor = (task, metrics) => {
+    if (task.isCompleted) return 'bg-emerald-600 border-emerald-700';
+    if (metrics.isOverdue) return 'bg-red-600 border-red-700';
+    if (task.stage === 'Pending Approval') return 'bg-purple-600 border-purple-700';
+    if (task.priority === 'Urgent') return 'bg-amber-600 border-amber-700';
+    if (['PE', 'CS', 'PD'].includes(getUserById(task.handlerId).dept)) return 'bg-[#007A86] border-[#005f69]';
+    return 'bg-[#004A52] border-[#00353b]';
+  };
+
+  const StageBadge = ({ status }) => {
+    const map = {
+      DONE: ['bg-emerald-100 text-emerald-800', 'Hoàn thành'],
+      OVERDUE: ['bg-red-100 text-red-700', 'Trễ hạn'],
+      PENDING: ['bg-purple-100 text-purple-800', 'Chờ Approval'],
+      NEEDINFO: ['bg-amber-100 text-amber-800', 'Cần bổ sung'],
+      ACTIVE: ['bg-teal-50 text-[#004A52]', 'Đang xử lý']
+    };
+    const [cls, text] = map[status] || map.ACTIVE;
+    return <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${cls}`}>{text}</span>;
+  };
+
+  // ---------------- ĐĂNG XUẤT & ĐỔI MẬT KHẨU ----------------
+  const handleLogout = () => {
+    if (window.confirm('Đăng xuất khỏi hệ thống?')) signOut(auth);
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (passForm.newPass.length < 6) return setPassForm({ ...passForm, error: 'Mật khẩu mới tối thiểu 6 ký tự.' });
+    if (passForm.newPass !== passForm.confirmPass) return setPassForm({ ...passForm, error: 'Mật khẩu xác nhận không khớp.' });
+    setBusy(true);
+    try {
+      const cred = EmailAuthProvider.credential(authUser.email, passForm.oldPass);
+      await reauthenticateWithCredential(authUser, cred);
+      await updatePassword(authUser, passForm.newPass);
+      setShowPasswordModal(false);
+      setPassForm({ oldPass: '', newPass: '', confirmPass: '', error: '' });
+      notify('Đổi mật khẩu thành công', 'Lần đăng nhập sau dùng mật khẩu mới.', 'success');
+    } catch (err) {
+      const msg = ['auth/invalid-credential', 'auth/wrong-password'].includes(err?.code)
+        ? 'Mật khẩu hiện tại không đúng.'
+        : friendlyError(err);
+      setPassForm({ ...passForm, error: msg });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ---------------- DỰ ÁN ----------------
+  const openCreateProject = () =>
+    setProjectModal({
+      mode: 'create', id: '', name: '', code: '', market: 'Vietnam',
+      startDate: nextWorkingDay(today), weekCodes: ['', '', '', ''], weekSubtitles: ['', '', '', ''], memberIds: [], error: ''
+    });
+
+  const openedVersions = useRef({});
+  const version = v => v?.seconds !== undefined ? `${v.seconds}:${v.nanoseconds || 0}` : null;
+  const remember = (kind, item) => { openedVersions.current[`${kind}/${item.id}`] = version(item.updatedAt); };
+  const openEditProject = (proj, e) => {
+    if (e) e.stopPropagation();
+    if (!canManageProject(proj)) return;
+    remember('projects', proj);
+    setProjectModal({
+      mode: 'edit', id: proj.id, name: proj.name || '', code: proj.code || '', market: proj.market || '',
+      startDate: proj.startDate || today, weekCodes: getProjectWeekCodes(proj),
+      weekSubtitles: getProjectWeekCodes(proj).map((_,i) => proj.weekSubtitles?.[i] || ''), memberIds: proj.memberIds || [], error: ''
+    });
+  };
+
+  const updateModalArray = (field, idx, value) => {
+    const arr = [...projectModal[field]];
+    arr[idx] = value;
+    setProjectModal({ ...projectModal, [field]: arr, error: '' });
+  };
+
+  const addWeek = () => setProjectModal(m => ({...m, weekCodes: [...m.weekCodes, nextWeekCode(m.weekCodes[m.weekCodes.length - 1])], weekSubtitles: [...m.weekSubtitles, ''], error: ''}));
+  const removeWeek = () => setProjectModal(m => m.weekCodes.length <= 4 ? m : ({...m, weekCodes: m.weekCodes.slice(0,-1), weekSubtitles: m.weekSubtitles.slice(0,-1), error: ''}));
+  const guardedUpdate = async (kind, id, data, action='UPDATE') => runTransaction(db, async tx => {
+    const ref = doc(db, kind, id), snap = await tx.get(ref);
+    if (!snap.exists()) throw Error('Bản ghi đã bị xóa.');
+    const expected = openedVersions.current[`${kind}/${id}`];
+    if (expected !== version(snap.data().updatedAt)) throw Error('Dữ liệu đã thay đổi bởi người khác. Hãy đóng và mở lại trước khi lưu.');
+    const audit = doc(collection(db, 'auditLogs'));
+    tx.update(ref, {...data, updatedAt: serverTimestamp(), updatedBy: me.id});
+    tx.set(audit, { actorId: me.id, action, kind, itemId: id, before: snap.data(), changes: data, at: serverTimestamp() });
+  });
+  const handleSaveProject = async (e) => {
+    e.preventDefault();
+    const m = projectModal;
+    if (!m.name.trim()) return setProjectModal({ ...m, error: 'Vui lòng nhập Tên dự án.' });
+    if (!m.startDate) return setProjectModal({ ...m, error: 'Vui lòng chọn Start Date.' });
+    const codes = m.weekCodes.map((c) => c.trim().toUpperCase());
+    if (codes.some(c => !/^P(?:[1-9]|1[0-3])W[1-4]$/.test(c))) return setProjectModal({...m,error:'Mã tuần phải có dạng P1W1 đến P13W4.'});
+    const missing = codes.findIndex((c) => !c);
+    if (missing !== -1) return setProjectModal({ ...m, error: `Vui lòng nhập mã P%W% cho Week ${missing + 1}.` });
+
+    const data = {
+      name: m.name.trim(),
+      code: m.code.trim(),
+      market: m.market.trim(),
+      startDate: nextWorkingDay(m.startDate),
+      weekCodes: codes,
+      weekSubtitles: m.weekSubtitles.map((s) => s.trim()),
+      memberIds: Array.from(new Set([me.id, ...(m.memberIds || [])])),
+      updatedAt: serverTimestamp(),
+      updatedBy: me.id
+    };
+
+    if (m.mode === 'create') {
+      const ref = await run(
+        async () => { const ref=doc(collection(db,'projects')); const batch=writeBatch(db); batch.set(ref,{...data,createdBy:me.id,createdAt:serverTimestamp()}); batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'CREATE',kind:'projects',itemId:ref.id,at:serverTimestamp()}); await batch.commit(); return ref; },
+        'Đã tạo dự án', `Dự án "${data.name}" đã sẵn sàng.`
+      );
+      if (ref) {
+        if (ref.id) setSelectedProjectId(ref.id);
+        setProjectModal(null);
+        setFilterPeriod('ALL');
+      }
+    } else {
+      const ok = await run(() => guardedUpdate('projects', m.id, data), 'Đã lưu dự án', `Đã cập nhật "${data.name}".`);
+      if (ok) setProjectModal(null);
+    }
+  };
+
+  const handleDeleteProject = async (proj, e) => {
+    if (e) e.stopPropagation();
+    if (!canManageProject(proj)) return;
+    const related = tasks.filter((t) => t.projectId === proj.id);
+    if (!window.confirm(`Xóa dự án "${proj.name}" và ${related.length} request bên trong?\nThao tác này không thể hoàn tác.`)) return;
+    await run(async () => {
+      for (let i = 0; i < related.length; i += 450) {
+        const batch = writeBatch(db);
+        related.slice(i, i + 450).forEach((t) => batch.delete(doc(db, 'tasks', t.id)));
+        await batch.commit();
+      }
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'projects', proj.id));
+      batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'DELETE',kind:'projects',itemId:proj.id,at:serverTimestamp()});
+      await batch.commit();
+    }, 'Đã xóa dự án', `Đã xóa "${proj.name}".`);
+  };
+
+  // ---------------- REQUEST ----------------
+  // Mã REQ dùng bộ đếm chung trên Firebase -> không trùng kể cả khi nhiều người tạo cùng lúc
+  const createTaskDoc = async (data) => {
+    const maxLocal = tasks.reduce((m, t) => Math.max(m, codeNumber(t.code)), 0);
+    const counterRef = doc(db, 'meta', 'taskCounter');
+    const newRef = doc(collection(db, 'tasks'));
+    const code = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(counterRef);
+      const next = Math.max(snap.exists() ? Number(snap.data().last) || 0 : 0, maxLocal) + 1;
+      const c = `REQ-${String(next).padStart(3, '0')}`;
+      tx.set(counterRef, { last: next });
+      tx.set(newRef, {
+        ...data, code: c, createdBy: me.id, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.id
+      });
+      tx.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'CREATE',kind:'tasks',itemId:newRef.id,at:serverTimestamp()});
+      return c;
+    });
+    return { id: newRef.id, code };
+  };
+
+  const openCreateTaskModal = () => {
+    if (!activeProject) return;
+    setNewTask(emptyNewTask(me, today));
+    setShowTaskModal(true);
+  };
+
+  const newTaskRangeWarning = (() => {
+    if (!newTask.startDate || !calendarGrid.startIso) return '';
+    const end = newTask.deadlineDate || newTask.startDate;
+    if (end < calendarGrid.startIso || newTask.startDate > calendarGrid.endIso) {
+      return `Thời gian request nằm ngoài lịch dự án (${formatShortDate(calendarGrid.startIso)} → ${formatShortDate(calendarGrid.endIso)}), thanh công việc sẽ không hiện trên biểu đồ.`;
+    }
+    return '';
+  })();
+
+  const handleCreateTask = async (e) => {
+    e.preventDefault();
+    if (!newTask.name.trim()) return setNewTask({ ...newTask, error: 'Vui lòng nhập tên công việc.' });
+    if (newTask.deadlineDate && newTask.deadlineDate < newTask.startDate)
+      return setNewTask({ ...newTask, error: 'Deadline không được trước Ngày bắt đầu.' });
+    const data = {
+      projectId: activeProject.id,
+      name: newTask.name.trim(),
+      category: newTask.category,
+      requesterId: newTask.requesterId,
+      handlerId: newTask.handlerId,
+      startDate: newTask.startDate,
+      deadlineDate: newTask.deadlineDate || '',
+      isCompleted: false,
+      completedDate: null,
+      stage: newTask.stage,
+      priority: newTask.priority,
+      note: newTask.note.trim()
+    };
+    const res = await run(() => createTaskDoc(data));
+    if (res && res.code) {
+      setShowTaskModal(false);
+      notify(`Đã tạo [${res.code}]`, `"${data.name}" → Người xử lý: ${getUserById(data.handlerId).name}.`, 'success');
+    }
+  };
+
+  // Chi tiết request: chỉnh trên bản nháp, bấm "Lưu thay đổi" mới ghi lên Firebase
+  const detailRow = allProjectTasks.find((r) => r.task.id === detailId) || null;
+  const detailTask = detailRow?.task || tasks.find((t) => t.id === detailId) || null;
+  useEffect(() => {
+    if (detailId && loaded.tasks && !tasks.some((t) => t.id === detailId)) {
+      setDetailId(null);
+      setDraft(null);
+    }
+  }, [detailId, tasks, loaded.tasks]);
+
+  const openDetail = (task) => {
+    remember('tasks', task);
+    setDetailId(task.id);
+    setDraft(pickEditable(task));
+  };
+  const isDirty = Boolean(detailTask && draft && EDITABLE_FIELDS.some((k) => String(draft[k] ?? '') !== String(detailTask[k] ?? '')));
+  const draftError = !draft
+    ? ''
+    : !draft.name.trim()
+      ? 'Tên không được để trống.'
+      : !draft.startDate
+        ? 'Vui lòng chọn Ngày bắt đầu.'
+        : draft.deadlineDate && draft.deadlineDate < draft.startDate
+          ? 'Deadline không được trước Ngày bắt đầu.'
+          : '';
+  const closeDetail = () => {
+    if (isDirty && !window.confirm('Bạn có thay đổi chưa lưu. Đóng và bỏ các thay đổi này?')) return;
+    setDetailId(null);
+    setDraft(null);
+  };
+
+  const saveDetail = async () => {
+    if (!detailTask || !canEditTask(detailTask) || draftError || !isDirty) return;
+    const ok = await run(
+      () => guardedUpdate('tasks', detailTask.id, {
+        ...draft, name: draft.name.trim(), note: String(draft.note || '').trim(),
+        updatedAt: serverTimestamp(), updatedBy: me.id
+      }),
+      'Đã lưu', `[${detailTask.code}] đã được cập nhật.`
+    );
+    if (ok) {
+      setDetailId(null);
+      setDraft(null);
+    }
+  };
+
+  const toggleComplete = async (task) => {
+    if (!canEditTask(task)) return;
+    remember('tasks', task);
+    const done = !task.isCompleted;
+    const ok = await run(
+      () => guardedUpdate('tasks', task.id, {
+        isCompleted: done, stage: done ? 'Completed' : 'In Progress', completedDate: done ? today : null,
+        updatedAt: serverTimestamp(), updatedBy: me.id
+      }),
+      done ? 'Đã hoàn thành' : 'Đã mở lại', `[${task.code}] ${task.name}`
+    );
+    if (ok && draft) setDraft({ ...draft, stage: done ? 'Completed' : 'In Progress' });
+  };
+
+  const deleteTask = async (task, e) => {
+    if (e) e.stopPropagation();
+    if (!canEditTask(task)) return;
+    if (!window.confirm(`Xóa request "[${task.code}] ${task.name}"?`)) return;
+    const ok = await run(async () => {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'tasks', task.id));
+      batch.set(doc(collection(db,'auditLogs')),{actorId:me.id,action:'DELETE',kind:'tasks',itemId:task.id,at:serverTimestamp()});
+      await batch.commit();
+    }, 'Đã xóa request', `[${task.code}] ${task.name}`);
+    if (ok && detailId === task.id) {
+      setDetailId(null);
+      setDraft(null);
+    }
+  };
+
+  const duplicateTask = async (task) => {
+    const data = {
+      projectId: task.projectId, name: `${task.name} (bản sao)`, category: task.category || CATEGORIES[0],
+      requesterId: me.id, handlerId: task.handlerId, startDate: task.startDate, deadlineDate: task.deadlineDate || '',
+      isCompleted: false, completedDate: null, stage: 'In Progress', priority: task.priority || 'Normal', note: task.note || ''
+    };
+    const res = await run(() => createTaskDoc(data));
+    if (res && res.code) {
+      notify('Đã nhân bản', `Đã tạo [${res.code}] từ [${task.code}].`, 'success');
+      setDetailId(res.id);
+      setDraft(pickEditable(data));
+    }
+  };
+
+  // ---------------- XUẤT EXCEL (CSV) ----------------
+  const handleExportCsv = () => {
+    const statusText = { ACTIVE: 'Đang xử lý', PENDING: 'Chờ Approval', NEEDINFO: 'Cần bổ sung', OVERDUE: 'Trễ hạn', DONE: 'Hoàn thành' };
+    const header = ['STT', 'Mã', 'Tên Request', 'Loại', 'Người yêu cầu', 'Team YC', 'Người xử lý', 'Team XL', 'Ngày bắt đầu', 'Deadline', 'Ngày hoàn thành', 'Trạng thái', 'Ưu tiên', 'Tiến độ (%)', 'Ghi chú'];
+    const rows = visibleRows.map(({ task: t, metrics, status }, i) => {
+      const r = getUserById(t.requesterId);
+      const h = getUserById(t.handlerId);
+      return [i + 1, t.code, t.name, t.category || '', r.name, r.dept, h.name, h.dept,
+        formatFullVNDate(t.startDate), formatFullVNDate(t.deadlineDate), formatFullVNDate(t.completedDate),
+        statusText[status], t.priority, metrics.progress, t.note || ''];
+    });
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+    const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${String(activeProject?.code || activeProject?.name || 'project').replace(/[^\w-]+/g, '_')}_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notify('Đã xuất file', `Đã tải ${rows.length} request ra file CSV (mở bằng Excel).`, 'success');
+  };
+
+
+  // Backup JSON chỉ dành cho Admin. JSON lưu ID để bảo toàn liên kết.
+  const backupData = async () => {
+    if (!isAdmin) return;
+    await run(async () => {
+      const groups = {};
+      for (const kind of ['users','projects','tasks']) {
+        const snap = await getDocs(collection(db, kind));
+        groups[kind] = snap.docs.map(d => ({id:d.id,data:d.data()}));
+      }
+      const payload = { format:'dv-team-hub-v1', savedAt:new Date().toISOString(), groups };
+      const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href=url; a.download=`DV_Team_Hub_Backup_${new Date().toISOString().replace(/[:.]/g,'-')}.json`; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    },'Đã xuất Backup','Lưu file JSON ở nơi an toàn.');
+  };
+  const restoreData = async e => {
+    if (!isAdmin) return;
+    const file=e.target.files?.[0]; e.target.value=''; if(!file)return;
+    try {
+      const backup=JSON.parse(await file.text());
+      if(backup.format!=='dv-team-hub-v1'||!backup.groups||!['users','projects','tasks'].every(k=>Array.isArray(backup.groups[k]))) throw Error('File không đúng định dạng.');
+      const rows=['users','projects','tasks'].flatMap(kind=>backup.groups[kind].map(row=>({kind,row})));
+      if(rows.some(({row})=>!row||typeof row.id!=='string'||!row.id||!row.data||typeof row.data!=='object'||Array.isArray(row.data)))throw Error('Có bản ghi không hợp lệ.');
+      const counts=['users','projects','tasks'].map(k=>`${k}: ${backup.groups[k].length}`).join(', ');
+      if(!window.confirm(`Backup ${backup.savedAt || ''}\n${counts}\n\nKhôi phục các bản ghi này? Dữ liệu hiện tại không có trong backup sẽ được giữ nguyên.`))return;
+      const decode=v=>{
+        if(Array.isArray(v))return v.map(decode);
+        if(v&&typeof v==='object'){
+          if(Number.isInteger(v.seconds)&&Number.isInteger(v.nanoseconds)&&Object.keys(v).length===2)return new Timestamp(v.seconds,v.nanoseconds);
+          return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,decode(x)]));
+        }
+        return v;
+      };
+      await run(async()=>{
+        // Không xóa bản ghi ngoài backup, ưu tiên cứu dữ liệu khi database bị mất.
+        for(let i=0;i<rows.length;i+=350){
+          const batch=writeBatch(db);
+          rows.slice(i,i+350).forEach(({kind,row})=>batch.set(doc(db,kind,row.id),decode(row.data)));
+          await batch.commit();
+        }
+        await addDoc(collection(db,'auditLogs'),{actorId:me.id,action:'RESTORE',kind:'backup',at:serverTimestamp(),savedAt:backup.savedAt,counts});
+      },'Đã khôi phục','Kiểm tra lại dữ liệu và liên kết User.');
+    }catch(err){notify('Restore không thành công',err.message||String(err),'error');}
+  };
+  useEffect(()=>{
+    if(!isAdmin)return;
+    return onSnapshot(collection(db,'auditLogs'),snap=>setAuditLogs(snap.docs.map(d=>({id:d.id,...d.data()}))),err=>console.error('Audit:',err));
+  },[isAdmin]);
+
+  // Hiển thị Audit Log theo ngôn ngữ người dùng, không hiển thị JSON thô.
+  const auditActions = { CREATE: 'Đã tạo', UPDATE: 'Đã cập nhật', DELETE: 'Đã xóa', RESTORE: 'Đã khôi phục dữ liệu' };
+  const auditFields = {
+    name:'Tên', code:'Mã', category:'Loại công việc', market:'Thị trường',
+    stage:'Giai đoạn', priority:'Mức ưu tiên', note:'Ghi chú',
+    startDate:'Ngày bắt đầu', deadlineDate:'Deadline', completedDate:'Ngày hoàn thành',
+    isCompleted:'Hoàn thành', requesterId:'Người yêu cầu', handlerId:'Người xử lý',
+    memberIds:'Người tham gia', weekCodes:'Mã tuần', weekSubtitles:'Tên Phase',
+    active:'Trạng thái tài khoản', role:'Quyền', dept:'Team'
+  };
+  const auditValue = (key, value) => {
+    if (value === undefined || value === null || value === '') return 'Trống';
+    if (key === 'isCompleted') return value ? 'Có' : 'Không';
+    if (key === 'active') return value ? 'Đang hoạt động' : 'Đã khóa';
+    if (['requesterId','handlerId'].includes(key)) return usersById[value]?.name || 'User không còn trong danh sách';
+    if (key === 'memberIds' && Array.isArray(value)) return value.map(id => usersById[id]?.name || 'User không còn trong danh sách').join(', ') || 'Không có';
+    if (Array.isArray(value)) return value.join(', ') || 'Trống';
+    if (value?.toDate) return value.toDate().toLocaleString('vi-VN');
+    if (typeof value === 'object') return 'Dữ liệu đã thay đổi';
+    return String(value);
+  };
+  const auditSubject = log => {
+    if (log.kind === 'backup') return 'Dữ liệu hệ thống';
+    const item = log.kind === 'projects' ? projects.find(p => p.id === log.itemId) : tasks.find(t => t.id === log.itemId);
+    const old = log.before || {};
+    if (log.kind === 'projects') return `Dự án: ${item?.name || old.name || 'Đã xóa / Không còn dữ liệu'}`;
+    if (log.kind === 'tasks') return `Request: ${item?.code || old.code || 'Không rõ mã'}${item?.name || old.name ? ' - ' + (item?.name || old.name) : ''}`;
+    return 'Dữ liệu hệ thống';
+  };
+  const auditChanges = log => {
+    const before = log.before || {};
+    const changes = log.changes || {};
+    return Object.keys(changes).filter(k => auditFields[k] && auditValue(k,before[k]) !== auditValue(k,changes[k]))
+      .map(k => ({ label:auditFields[k], from:auditValue(k,before[k]), to:auditValue(k,changes[k]), hasBefore:Object.prototype.hasOwnProperty.call(before,k) }));
+  };
+
+  // ---------------- QUẢN LÝ USER (ADMIN) ----------------
+  const countActiveAdmins = (list) => list.filter((u) => u.role === 'Admin' && u.active !== false).length;
+  const countUserTasks = (uid) => tasks.filter((t) => t.requesterId === uid || t.handlerId === uid).length;
+  const countUserOpenTasks = (uid) => tasks.filter((t) => t.handlerId === uid && !t.isCompleted).length;
+
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    const name = newUser.name.trim();
+    const email = newUser.email.trim().toLowerCase();
+    if (!name || !email) return setUserFormError('Vui lòng nhập Họ tên và Email.');
+    if (users.some((u) => String(u.email).toLowerCase() === email)) return setUserFormError(`Email ${email} đã có trong danh sách.`);
+    if (newUser.password.length < 6) return setUserFormError('Mật khẩu khởi tạo tối thiểu 6 ký tự.');
+    setUserFormError('');
+    setBusy(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, newUser.password);
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        name, email, dept: newUser.dept, role: newUser.role, active: true, avatar: makeInitials(name),
+        createdAt: serverTimestamp(), createdBy: me.id
+      });
+      await signOut(secondaryAuth);
+      notify('Đã cấp tài khoản', `Gửi cho ${name}: email ${email} và mật khẩu khởi tạo. Nhân viên nên tự đổi mật khẩu sau khi đăng nhập.`, 'success');
+      setNewUser({ name: '', email: '', password: '', dept: 'DV', role: 'Member' });
+    } catch (err) {
+      setUserFormError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveEditUser = async () => {
+    if (!isAdmin || !editingUser) return;
+    const name = editingUser.name.trim();
+    if (!name) return setUserFormError('Tên không được để trống.');
+    const next = users.map((u) => (u.id === editingUser.id ? { ...u, role: editingUser.role } : u));
+    if (countActiveAdmins(next) === 0) return setUserFormError('Hệ thống phải còn ít nhất 1 Admin đang hoạt động.');
+    setUserFormError('');
+    const ok = await run(
+      () => updateDoc(doc(db, 'users', editingUser.id), { name, dept: editingUser.dept, role: editingUser.role, avatar: makeInitials(name) }),
+      'Đã cập nhật', `Thông tin của ${name} đã được lưu.`
+    );
+    if (ok) setEditingUser(null);
+  };
+
+  const handleToggleUserActive = async (u) => {
+    if (!isAdmin) return;
+    if (u.id === me.id) return setUserFormError('Bạn không thể tự khóa tài khoản của mình.');
+    const next = users.map((x) => (x.id === u.id ? { ...x, active: x.active === false } : x));
+    if (countActiveAdmins(next) === 0) return setUserFormError('Hệ thống phải còn ít nhất 1 Admin đang hoạt động.');
+    setUserFormError('');
+    const unlocking = u.active === false;
+    await run(
+      () => updateDoc(doc(db, 'users', u.id), { active: unlocking }),
+      unlocking ? 'Đã mở khóa' : 'Đã khóa tài khoản',
+      unlocking ? `${u.name} có thể đăng nhập lại.` : `${u.name} không thể truy cập nữa. Lịch sử request vẫn được giữ nguyên.`
+    );
+  };
+
+  const handleAdminResetPassword = async (u) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`Gửi email đặt lại mật khẩu đến ${u.email}?`)) return;
+    await run(() => sendPasswordResetEmail(auth, u.email), 'Đã gửi email', `Nhắc ${u.name} kiểm tra hộp thư (cả Junk/Spam).`);
+  };
+
+  const openDeleteUser = (u) => {
+    if (!isAdmin) return;
+    if (u.id === me.id) return setUserFormError('Bạn không thể tự xóa tài khoản của mình.');
+    if (countActiveAdmins(users.filter((x) => x.id !== u.id)) === 0) return setUserFormError('Không thể xóa Admin cuối cùng.');
+    setUserFormError('');
+    setDeleteUserData({ user: u, taskCount: countUserTasks(u.id), reassignTo: me.id });
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!isAdmin || !deleteUserData) return;
+    const { user, taskCount, reassignTo } = deleteUserData;
+    if (taskCount > 0 && !reassignTo) return;
+    const related = tasks.filter((t) => t.requesterId === user.id || t.handlerId === user.id);
+    const ok = await run(async () => {
+      for (let i = 0; i < related.length; i += 450) {
+        const batch = writeBatch(db);
+        related.slice(i, i + 450).forEach((t) => {
+          batch.update(doc(db, 'tasks', t.id), {
+            requesterId: t.requesterId === user.id ? reassignTo : t.requesterId,
+            handlerId: t.handlerId === user.id ? reassignTo : t.handlerId,
+            updatedAt: serverTimestamp(), updatedBy: me.id
+          });
+        });
+        await batch.commit();
+      }
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', user.id));
+      await batch.commit();
+    }, 'Đã xóa tài khoản', taskCount > 0 ? `Đã chuyển ${taskCount} request cho ${getUserById(reassignTo).name}.` : user.name);
+    if (ok) setDeleteUserData(null);
+  };
+
+  const filteredUsers = users
+    .filter((u) => {
+      const q = userSearch.trim().toLowerCase();
+      return !q || [u.name, u.email, u.dept].some((v) => String(v || '').toLowerCase().includes(q));
+    })
+    .sort((a, b) => (a.active === false) - (b.active === false) || String(a.name).localeCompare(String(b.name)));
+
+  // ---------------- PHÍM ESC ĐỂ ĐÓNG CỬA SỔ ----------------
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (deleteUserData) return setDeleteUserData(null);
+      if (showAudit) return setShowAudit(false);
+      if (detailId) return closeDetail();
+      if (showTaskModal) return setShowTaskModal(false);
+      if (projectModal) return setProjectModal(null);
+      if (showUserModal) return setShowUserModal(false);
+      if (showPasswordModal) return setShowPasswordModal(false);
+      return undefined;
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  if (loadError) return <ErrorScreen title="Không tải được dữ liệu" message={loadError} />;
+  if (!allLoaded) return <LoadingScreen />;
+
+  const firstPeriod = calendarGrid.weeks[0]?.periodCode || '';
+
+  return (
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden">
+      {/* ==================== SIDEBAR ==================== */}
+      <aside className="w-72 bg-[#004A52] text-white flex flex-col shadow-2xl z-20 select-none shrink-0">
+        <div className="p-5 border-b border-white/10">
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-[#FFD61F]"></div>
+            <h1 className="text-lg font-extrabold tracking-wider">WORLDPANEL</h1>
+          </div>
+          <p className="text-[11px] text-teal-200/80 font-medium mt-0.5">DATA VALIDATION TEAM HUB</p>
+        </div>
+
+        <div className="p-4 border-b border-white/10">
+          <button
+            onClick={openCreateProject}
+            className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#007A86] to-teal-600 hover:from-teal-500 hover:to-teal-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg border border-teal-400/30 transition-all"
+          >
+            <FolderPlus size={16} /> Tạo Dự Án Mới
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+          <div className="px-2 pb-1 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-teal-300/80 whitespace-nowrap">Danh sách Dự án ({displayedProjects.length})</span>
+            <select aria-label="Lọc danh sách dự án" value={projectScope} onChange={e => setProjectScope(e.target.value)}
+              className="min-w-0 max-w-[110px] rounded-md bg-white text-[#004A52] px-1.5 py-1 text-[10px] font-bold normal-case shadow-sm">
+              <option value="MY">My Projects</option><option value="ALL">All Projects</option>
+            </select>
+          </div>
+
+          {displayedProjects.length === 0 && (
+            <div className="px-2 py-4 text-[11px] text-teal-100/80">Chưa có dự án nào. Bấm “Tạo Dự Án Mới” để bắt đầu.</div>
+          )}
+
+          {displayedProjects.map((proj) => {
+            const isSelected = proj.id === activeProject?.id;
+            const codes = getProjectWeekCodes(proj);
+            const info = getProjectDoneCount(proj.id);
+            const pDays = buildWorkingDays(proj.startDate, getProjectWeekCodes(proj).length * DAYS_PER_WEEK);
+            const pct = info.total ? Math.round((info.done / info.total) * 100) : 0;
+            return (
+              <div
+                key={proj.id}
+                onClick={() => setSelectedProjectId(proj.id)}
+                className={`group w-full text-left p-3 rounded-xl transition-all border cursor-pointer ${
+                  isSelected ? 'bg-white/15 border-teal-300/40 shadow-md' : 'bg-transparent border-transparent hover:bg-white/5 text-teal-100/80'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-black/30 text-[#FFD61F] shrink-0">
+                      {codes[0] || 'Chưa đặt mã'}
+                    </span>
+                    {proj.code && <span className="text-[10px] text-teal-200 truncate">{proj.code}</span>}
+                  </div>
+                  {canManageProject(proj) && (
+                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100">
+                      <button onClick={(e) => openEditProject(proj, e)} title="Sửa dự án & lịch" className="p-1 rounded hover:bg-white/20 text-teal-200 hover:text-white">
+                        <Edit3 size={12} />
+                      </button>
+                      <button onClick={(e) => handleDeleteProject(proj, e)} title="Xóa dự án" className="p-1 rounded hover:bg-red-500/80 text-teal-200 hover:text-white">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="font-bold text-sm truncate mb-1.5 flex items-center justify-between">
+                  <span className="truncate">{proj.name}</span>
+                  {isSelected && <ChevronRight size={15} className="text-[#FFD61F] shrink-0" />}
+                </div>
+                <div className="text-[10px] text-teal-200/90 mb-2 flex items-center justify-between">
+                  <span>Lịch: {formatShortDate(pDays[0])} → {formatShortDate(pDays[pDays.length - 1])}</span>
+                  {proj.market && <span>{proj.market}</span>}
+                </div>
+                <div className="w-full bg-black/30 h-1.5 rounded-full overflow-hidden mb-1">
+                  <div className="bg-[#FFD61F] h-full transition-all duration-300" style={{ width: `${pct}%` }} />
+                </div>
+                <div className="flex justify-between text-[10px] text-teal-200/80">
+                  <span>{info.total} request</span>
+                  <span className="font-bold text-white">Xong {info.done}/{info.total}{info.total > 0 && ` (${pct}%)`}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Tài khoản */}
+        <div className="p-4 bg-black/25 border-t border-white/10 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-[#FFD61F] text-[#004A52] font-extrabold text-xs flex items-center justify-center shrink-0 shadow">
+                {me.avatar || makeInitials(me.name)}
+              </div>
+              <div className="truncate">
+                <div className="text-xs font-bold text-white truncate">{me.name}</div>
+                <div className="text-[10px] text-teal-200 flex items-center gap-1">
+                  <span>Team: <strong>{me.dept}</strong></span>
+                  {isAdmin && (<><span>•</span><span className="text-[#FFD61F] font-bold">Admin</span></>)}
+                </div>
+              </div>
+            </div>
+            <button onClick={handleLogout} title="Đăng xuất" className="p-2 rounded-lg bg-white/10 hover:bg-red-500/80 text-white transition-colors">
+              <LogOut size={14} />
+            </button>
+          </div>
+          <button
+            onClick={() => { setPassForm({ oldPass: '', newPass: '', confirmPass: '', error: '' }); setShowPasswordModal(true); }}
+            className="w-full py-1.5 px-2 text-[10px] font-semibold bg-white/10 hover:bg-white/20 rounded-lg text-teal-100 flex items-center justify-center gap-1"
+          >
+            <KeyRound size={11} /> Đổi mật khẩu
+          </button>
+        </div>
+      </aside>
+
+      {/* ==================== NỘI DUNG CHÍNH ==================== */}
+      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+        {!activeProject ? (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="text-center space-y-3 max-w-sm">
+              <FolderPlus size={36} className="mx-auto text-[#007A86]" />
+              <h2 className="text-base font-extrabold text-slate-800">Chào mừng {me.name}!</h2>
+              <p className="text-xs text-slate-500">Hệ thống chưa có dự án nào. Tạo dự án đầu tiên để bắt đầu theo dõi request.</p>
+              <button onClick={openCreateProject} className="px-4 py-2 bg-[#004A52] text-white font-bold rounded-xl text-xs inline-flex items-center gap-1.5">
+                <FolderPlus size={14} /> Tạo Dự Án Mới
+              </button>
+              {isAdmin && (
+                <button onClick={() => { setUserFormError(''); setShowUserModal(true); }} className="block mx-auto text-xs font-bold text-[#007A86] hover:underline">
+                  hoặc thêm nhân sự trước
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 shrink-0 z-10">
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  {firstPeriod && (
+                    <span className="px-2.5 py-1 bg-[#004A52] text-[#FFD61F] text-xs font-extrabold rounded-lg">{firstPeriod}</span>
+                  )}
+                  <h2 className="text-lg font-extrabold text-slate-800">{activeProject.name}</h2>
+                  {activeProject.code && (
+                    <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs font-bold rounded">{activeProject.code}</span>
+                  )}
+                  {canManageProject(activeProject) && (
+                    <button onClick={(e) => openEditProject(activeProject, e)} className="inline-flex items-center gap-1 text-xs font-bold text-[#007A86] hover:underline ml-1">
+                      <Settings size={13} /> Chỉnh Lịch Panel / Đổi tên
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-1 flex items-center gap-3 flex-wrap">
+                  <span>
+                    {calendarGrid.weeks.length} week × 5 ngày làm việc ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks[calendarGrid.weeks.length - 1]?.label}):{' '}
+                    <strong>{formatShortDate(calendarGrid.startIso)}</strong> đến <strong>{formatShortDate(calendarGrid.endIso)}</strong>
+                  </span>
+                  <span>•</span>
+                  <span className="text-orange-600 font-bold">Hôm nay: {formatFullVNDate(today)}</span>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center border-2 border-[#004A52] rounded-lg overflow-hidden">
+                  <div className="bg-white px-3 py-1.5 text-xs font-extrabold text-[#004A52] flex items-center gap-1.5">
+                    <Calendar size={13} /> Start Date
+                  </div>
+                  <div className="bg-[#FFF4D6] px-3 py-1.5 text-xs font-extrabold text-[#991B1B] border-l-2 border-[#004A52]">
+                    {formatFullVNDate(calendarGrid.startIso)}
+                  </div>
+                </div>
+                <button
+                  onClick={handleExportCsv} disabled={visibleRows.length === 0}
+                  title="Xuất danh sách request đang hiển thị ra Excel (CSV)"
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold disabled:opacity-40"
+                >
+                  <Download size={15} className="text-[#007A86]" /> Xuất Excel
+                </button>
+                {isAdmin && <>
+                  <button onClick={backupData} disabled={busy} className="px-3 py-2 rounded-xl border border-teal-200 text-xs font-bold">Backup JSON</button>
+                  <label className="px-3 py-2 rounded-xl border border-amber-200 text-xs font-bold cursor-pointer">Restore JSON
+                    <input type="file" accept=".json,application/json" className="hidden" onChange={restoreData}/>
+                  </label>
+                  <button onClick={()=>setShowAudit(true)} className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold">Audit Log</button>
+                </>}
+                {isAdmin && (
+                  <button
+                    onClick={() => { setUserFormError(''); setEditingUser(null); setShowUserModal(true); }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold"
+                  >
+                    <Users size={15} className="text-[#007A86]" /> Quản lý User ({users.length})
+                  </button>
+                )}
+                <button
+                  onClick={openCreateTaskModal}
+                  className="flex items-center gap-1.5 bg-[#004A52] hover:bg-[#006069] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md"
+                >
+                  <PlusCircle size={15} /> Tạo Request Mới
+                </button>
+              </div>
+            </header>
+
+            {/* Thẻ thống kê (bấm để lọc) */}
+            <div className="bg-white border-b border-slate-200 px-6 py-2.5 flex flex-wrap items-center gap-2 shrink-0">
+              {[
+                { key: 'ALL', label: 'Tổng request', cls: 'text-slate-800', ring: 'ring-slate-400' },
+                { key: 'ACTIVE', label: 'Đang xử lý', cls: 'text-[#004A52]', ring: 'ring-[#007A86]' },
+                { key: 'PENDING', label: 'Chờ Approval', cls: 'text-purple-700', ring: 'ring-purple-500' },
+                { key: 'NEEDINFO', label: 'Cần bổ sung', cls: 'text-amber-700', ring: 'ring-amber-500' },
+                { key: 'OVERDUE', label: 'Trễ hạn', cls: 'text-red-600', ring: 'ring-red-500' },
+                { key: 'DONE', label: 'Hoàn thành', cls: 'text-emerald-700', ring: 'ring-emerald-500' }
+              ].map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setFilterStatus(filterStatus === c.key ? 'ALL' : c.key)}
+                  className={`px-3.5 py-1.5 rounded-xl border text-left transition-all min-w-[112px] ${
+                    filterStatus === c.key ? `ring-2 ${c.ring} border-transparent bg-slate-50` : 'border-slate-200 hover:bg-slate-50'
+                  } ${c.key === 'OVERDUE' && statusCounts.OVERDUE > 0 ? 'bg-red-50/60' : ''}`}
+                >
+                  <div className={`text-lg font-extrabold leading-tight ${c.cls}`}>{statusCounts[c.key]}</div>
+                  <div className="text-[10px] font-semibold text-slate-500">{c.label}</div>
+                </button>
+              ))}
+              <div className="ml-auto text-[11px] text-slate-500 flex items-center gap-2">
+                Đang hiển thị <strong className="text-slate-800">{visibleRows.length}</strong>/{allProjectTasks.length} request
+                {hasActiveFilter && (
+                  <button onClick={clearAllFilters} className="text-[#007A86] font-bold hover:underline flex items-center gap-0.5">
+                    <X size={12} /> Xóa bộ lọc
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Bộ lọc */}
+            <div className="bg-white border-b border-slate-200 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <div className="relative w-56">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tìm tên việc, mã REQ, người..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#007A86]"
+                  />
+                </div>
+                {periodOptions.length > 1 && (
+                  <div className="flex items-center bg-slate-100 p-1 rounded-lg text-[11px] font-bold gap-0.5">
+                    <span className="px-2 py-0.5 text-slate-400 flex items-center gap-1"><Filter size={11} /> Period:</span>
+                    {periodOptions.map((p) => (
+                      <button
+                        key={p} onClick={() => setFilterPeriod(p)}
+                        className={`px-2.5 py-1 rounded-md ${filterPeriod === p ? 'bg-[#007A86] text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                      >
+                        {p === 'ALL' ? 'Tất cả' : p}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center bg-slate-100 p-1 rounded-lg text-[11px] font-bold flex-wrap gap-0.5">
+                  {['ALL', ...TEAMS].map((d) => (
+                    <button
+                      key={d} onClick={() => setFilterDept(d)}
+                      className={`px-2 py-1 rounded-md ${filterDept === d ? 'bg-[#004A52] text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      {d === 'ALL' ? 'Tất cả Team' : d}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setOnlyMine(!onlyMine)}
+                  title="Chỉ hiện request mà bạn là người yêu cầu hoặc người xử lý"
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border flex items-center gap-1 ${
+                    onlyMine ? 'bg-[#004A52] border-[#004A52] text-white' : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <User size={12} /> Việc của tôi
+                </button>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-slate-600 font-medium flex-wrap">
+                {[
+                  ['bg-[#004A52]', 'Đang xử lý'], ['bg-purple-600', 'Chờ Approval'], ['bg-amber-600', 'Gấp'],
+                  ['bg-red-600', 'Trễ hạn'], ['bg-emerald-600', 'Hoàn thành (tự thu nhỏ)']
+                ].map(([c, t]) => (
+                  <span key={t} className="flex items-center gap-1"><span className={`w-2.5 h-2.5 rounded-sm inline-block ${c}`}></span> {t}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* ==================== BẢNG GANTT ==================== */}
+            <div className="flex-1 overflow-auto p-5 bg-slate-100/70">
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden" style={{minWidth: `${380 + calendarGrid.days.length * 42}px`}}>
+                {/* Tầng 1: mã tuần */}
+                <div className="flex border-b border-white/20 bg-[#138A9C] text-white text-xs font-extrabold">
+                  <div className="w-[380px] shrink-0 px-4 py-2.5 bg-[#004A52] border-r border-white/20 flex items-center justify-between">
+                    <span className="flex items-center gap-2 text-[#FFD61F]">
+                      <Calendar size={15} /> LỊCH PANEL ({calendarGrid.weeks[0]?.label} → {calendarGrid.weeks[calendarGrid.weeks.length - 1]?.label})
+                    </span>
+                    <span className="text-[10px] text-teal-200 font-semibold">5 ngày / week</span>
+                  </div>
+                  <div className="flex-1 flex">
+                    {calendarGrid.weeks.map((wk) => (
+                      <div
+                        key={wk.weekIndex}
+                        title={`${wk.fullTitle}: ${formatFullVNDate(wk.firstIso)} → ${formatFullVNDate(wk.lastIso)}`}
+                        className={`flex-1 min-w-0 py-1.5 px-2 text-center border-r border-white/25 truncate ${wk.weekCode ? '' : 'italic text-white/70'}`}
+                      >
+                        <div className="truncate">{wk.fullTitle}</div>
+                        <div className="text-[10px] font-semibold text-teal-100/90">{formatShortDate(wk.firstIso)} – {formatShortDate(wk.lastIso)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tầng 2: thứ */}
+                <div className="flex border-b border-white/20 bg-[#199BAE] text-white text-[11px] font-bold">
+                  <div className="w-[380px] shrink-0 px-4 py-1.5 bg-[#005B66] border-r border-white/20 flex items-center justify-between text-teal-100">
+                    <span>Danh sách Request / Công việc ({visibleRows.length})</span>
+                    <span>Trạng thái</span>
+                  </div>
+                  <div className="flex-1 flex">
+                    {calendarGrid.days.map((d) => (
+                      <div
+                        key={`day-${d.colIndex}`}
+                        title={d.afterWeekendGap ? 'Sau cuối tuần (T7, CN được bỏ qua)' : undefined}
+                        className={`flex-1 py-1.5 text-center border-r ${d.isWeekBoundary ? 'border-r-white/50' : 'border-r-white/20'} ${
+                          d.afterWeekendGap ? 'border-l-2 border-l-[#FFD61F]' : ''
+                        } ${d.isToday ? 'bg-orange-500 font-extrabold' : ''}`}
+                      >
+                        {d.dayName}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tầng 3: ngày */}
+                <div className="flex border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600">
+                  <div className="w-[380px] shrink-0 px-4 py-1.5 border-r border-slate-200 flex items-center justify-between text-slate-500">
+                    <span>Bấm vào dòng để xem / cập nhật</span>
+                    <span>Tiến độ</span>
+                  </div>
+                  <div className="flex-1 flex">
+                    {calendarGrid.days.map((d) => (
+                      <div
+                        key={`date-${d.colIndex}`}
+                        className={`flex-1 py-1.5 text-center border-r ${d.isWeekBoundary ? 'border-r-slate-300' : 'border-r-slate-200'} ${
+                          d.afterWeekendGap ? 'border-l-2 border-l-amber-400' : ''
+                        } ${d.isToday ? 'bg-orange-500 text-white font-extrabold' : ''}`}
+                      >
+                        {d.shortDate}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Thân biểu đồ */}
+                {visibleRows.length === 0 ? (
+                  <div className="p-12 text-center text-slate-500 text-xs space-y-3">
+                    {allProjectTasks.length === 0 ? (
+                      <>
+                        <div>Dự án này chưa có request nào.</div>
+                        <button onClick={openCreateTaskModal} className="px-3.5 py-1.5 bg-[#004A52] text-white font-bold rounded-lg inline-flex items-center gap-1">
+                          <PlusCircle size={13} /> Tạo request đầu tiên
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div>Không có request nào khớp với bộ lọc hiện tại.</div>
+                        <button onClick={clearAllFilters} className="px-3.5 py-1.5 bg-[#004A52] text-white font-bold rounded-lg">
+                          Xóa bộ lọc ({allProjectTasks.length} request)
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 relative">
+                    {visibleRows.map(({ task, metrics, status }) => {
+                      const requester = getUserById(task.requesterId);
+                      const handler = getUserById(task.handlerId);
+                      const small = metrics.isReceded;
+                      return (
+                        <div
+                          key={task.id}
+                          onClick={() => openDetail(task)}
+                          className={`flex cursor-pointer group transition-all ${
+                            small ? 'bg-slate-50/70 opacity-60 hover:opacity-100' : 'bg-white hover:bg-teal-50/40'
+                          }`}
+                        >
+                          <div className={`w-[380px] shrink-0 px-4 border-r border-slate-200 flex flex-col justify-center ${small ? 'py-1.5' : 'py-3.5'}`}>
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
+                                  {task.code}
+                                </span>
+                                {task.priority === 'Urgent' && !task.isCompleted && (
+                                  <AlertTriangle size={12} className="text-amber-600 shrink-0" />
+                                )}
+                                <span title={task.name} className={`font-bold text-slate-800 truncate group-hover:text-[#007A86] ${small ? 'text-[11px]' : 'text-xs'}`}>
+                                  {task.name}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {canEditTask(task) && (
+                                  <button
+                                    onClick={(e) => deleteTask(task, e)} title="Xóa request"
+                                    className="hidden group-hover:inline-flex p-1 rounded hover:bg-red-100 text-slate-400 hover:text-red-600"
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                )}
+                                <StageBadge status={status} />
+                              </div>
+                            </div>
+                            {!small && (
+                              <>
+                                <div className="text-[11px] text-slate-500 mt-1 truncate">
+                                  YC: <strong>{requester.name}</strong> ({requester.dept})
+                                  <span className="mx-1.5 text-slate-300">→</span>
+                                  <span className="text-[#004A52] font-bold">Xử lý: {handler.name} ({handler.dept})</span>
+                                </div>
+                                <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                                  <span className={`flex items-center gap-1 ${metrics.isOverdue ? 'text-red-600 font-bold' : ''}`}>
+                                    <Clock size={10} /> {metrics.label}
+                                  </span>
+                                  <span className="font-extrabold text-slate-700">{metrics.progress}%</span>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          <div className={`flex-1 relative flex items-center ${small ? 'py-1' : 'py-2'}`}>
+                            <div className="absolute inset-0 flex pointer-events-none">
+                              {calendarGrid.days.map((d) => (
+                                <div
+                                  key={d.dateIso}
+                                  className={`flex-1 h-full border-r ${d.isWeekBoundary ? 'border-r-slate-300' : 'border-r-slate-100'} ${
+                                    d.afterWeekendGap ? 'border-l-2 border-l-amber-200' : ''
+                                  } ${d.isToday ? 'bg-orange-50/60' : ''}`}
+                                />
+                              ))}
+                            </div>
+                            {todayColIndex >= 0 && (
+                              <div
+                                className="absolute top-0 bottom-0 z-20 pointer-events-none border-l-2 border-dashed border-[#FF8200]"
+                                style={{ left: `${((todayColIndex + 0.5) / calendarGrid.days.length) * 100}%` }}
+                              />
+                            )}
+                            {metrics.outOfRange ? (
+                              <div className="relative z-10 w-full text-center text-[11px] text-slate-400 italic">
+                                Ngoài khoảng lịch dự án ({formatShortDate(task.startDate)} → {formatShortDate(metrics.endIso)})
+                              </div>
+                            ) : (
+                              <div
+                                className={`relative z-10 rounded-lg border flex items-center px-3 text-white font-bold overflow-hidden ${
+                                  small ? 'h-6 text-[10px]' : 'h-10 text-xs shadow-sm'
+                                } ${getBarColor(task, metrics)}`}
+                                style={{
+                                  marginLeft: `calc(${((metrics.startCol - 1) / calendarGrid.days.length) * 100}% + 3px)`,
+                                  width: `calc(${(metrics.spanCols / calendarGrid.days.length) * 100}% - 6px)`
+                                }}
+                              >
+                                <div className="absolute left-0 top-0 bottom-0 bg-white/25 pointer-events-none" style={{ width: `${metrics.progress}%` }} />
+                                <div className="relative z-10 flex items-center justify-between w-full gap-1.5 truncate">
+                                  <span className="truncate flex items-center gap-1.5">
+                                    {task.isCompleted ? <CheckCircle2 size={small ? 11 : 13} /> : <PlayCircle size={13} />}
+                                    {task.name}
+                                  </span>
+                                  {!small && (
+                                    <span className="text-[10px] bg-black/30 px-1.5 py-0.5 rounded font-extrabold shrink-0">{metrics.progress}%</span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {todayColIndex >= 0 && (
+                      <div
+                        className="absolute top-1 z-30 pointer-events-none"
+                        style={{ left: `calc(380px + (100% - 380px) * ${(todayColIndex + 0.5) / calendarGrid.days.length})` }}
+                      >
+                        <span className="-translate-x-1/2 inline-block bg-[#FF8200] text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full shadow">
+                          HÔM NAY ({formatShortDate(today)})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+
+      {/* ==================== MODAL: CHI TIẾT REQUEST ==================== */}
+      {detailTask && draft && (() => {
+        const editable = canEditTask(detailTask);
+        const done = Boolean(detailTask.isCompleted);
+        const status = detailRow?.status || (done ? 'DONE' : 'ACTIVE');
+        const creator = getUserById(detailTask.createdBy);
+        const updater = getUserById(detailTask.updatedBy);
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) closeDetail(); }}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+              <div className="bg-[#004A52] text-white p-5 flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 bg-[#FFD61F] text-[#004A52] font-extrabold text-xs rounded">{detailTask.code}</span>
+                    <span className="text-xs text-teal-200">{detailTask.category}</span>
+                    <StageBadge status={status} />
+                  </div>
+                  <h3 className="text-base font-bold mt-1 truncate">{detailTask.name}</h3>
+                </div>
+                <button onClick={closeDetail} className="p-1.5 hover:bg-white/10 rounded-lg shrink-0"><X size={18} /></button>
+              </div>
+
+              <div className="p-6 space-y-4 text-xs max-h-[75vh] overflow-y-auto">
+                {editable ? (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-emerald-900">
+                    <span className="flex items-center gap-2"><Unlock size={15} className="text-emerald-600 shrink-0" /> Bạn có quyền cập nhật request này.</span>
+                    <button
+                      onClick={() => toggleComplete(detailTask)} disabled={busy}
+                      className={`px-3 py-1.5 rounded-lg font-extrabold flex items-center gap-1 shrink-0 text-white disabled:opacity-50 ${
+                        done ? 'bg-slate-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                      }`}
+                    >
+                      <Check size={14} /> {done ? 'Mở lại công việc' : 'Bấm Hoàn Thành'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2.5 text-amber-900">
+                    <Lock size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold">Chế độ xem</p>
+                      <p className="mt-0.5">
+                        Chỉ <strong>{getUserById(detailTask.requesterId).name}</strong> (người yêu cầu), <strong>{getUserById(detailTask.handlerId).name}</strong> (người xử lý) hoặc Admin mới cập nhật được.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Tên Request / Công việc *</label>
+                  <input
+                    type="text" disabled={!editable} value={draft.name}
+                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    className={`w-full px-3 py-2 border rounded-xl font-bold disabled:bg-slate-100 ${draft.name.trim() ? 'border-slate-200' : 'border-red-400 bg-red-50'}`}
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Loại công việc</label>
+                  <select
+                    disabled={!editable} value={draft.category}
+                    onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-semibold disabled:bg-slate-100"
+                  >
+                    {[...new Set([...CATEGORIES, draft.category].filter(Boolean))].map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  {[['requesterId', 'Người yêu cầu'], ['handlerId', 'Người xử lý / Phê duyệt (PIC)']].map(([field, label]) => (
+                    <div key={field}>
+                      <span className="text-slate-500 block mb-1 font-semibold">{label}</span>
+                      <select
+                        disabled={!editable} value={draft[field]}
+                        onChange={(e) => setDraft({ ...draft, [field]: e.target.value })}
+                        className="w-full font-bold text-[#004A52] bg-white border border-slate-300 rounded-lg px-2 py-1.5 disabled:bg-slate-100"
+                      >
+                        {!usersById[draft[field]] && <option value={draft[field]}>Đã xóa / Chưa gán</option>}
+                        {userOptionsFor(draft[field]).map((u) => (
+                          <option key={u.id} value={u.id}>{u.name} (Team {u.dept}){u.active === false ? ' – đã khóa' : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Giai đoạn</label>
+                    <select
+                      disabled={!editable || done} value={done ? 'Completed' : draft.stage}
+                      onChange={(e) => setDraft({ ...draft, stage: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-bold disabled:bg-slate-100"
+                    >
+                      {done && <option value="Completed">Đã hoàn thành</option>}
+                      <option value="In Progress">Đang xử lý</option>
+                      <option value="Pending Approval">Chờ Approval (Phê duyệt)</option>
+                      <option value="Need Info">Cần bổ sung thông tin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Mức độ ưu tiên</label>
+                    <select
+                      disabled={!editable} value={draft.priority}
+                      onChange={(e) => setDraft({ ...draft, priority: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-bold disabled:bg-slate-100"
+                    >
+                      <option value="Normal">Bình thường</option>
+                      <option value="High">Cao (High)</option>
+                      <option value="Urgent">Khẩn cấp (Urgent)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 bg-teal-50/50 p-3.5 rounded-xl border border-teal-100">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Ngày bắt đầu *</label>
+                    <input
+                      type="date" disabled={!editable} value={draft.startDate}
+                      onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
+                      className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700">Deadline <span className="font-normal text-slate-400">(trống = tự giãn)</span></label>
+                      {draft.deadlineDate && editable && (
+                        <button type="button" onClick={() => setDraft({ ...draft, deadlineDate: '' })} className="text-[10px] text-red-600 font-bold hover:underline">Xóa</button>
+                      )}
+                    </div>
+                    <input
+                      type="date" disabled={!editable} value={draft.deadlineDate} min={draft.startDate}
+                      onChange={(e) => setDraft({ ...draft, deadlineDate: e.target.value })}
+                      className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white disabled:bg-slate-100"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Ghi chú / Phản hồi phê duyệt</label>
+                  <textarea
+                    rows="3" disabled={!editable} value={draft.note}
+                    onChange={(e) => setDraft({ ...draft, note: e.target.value })}
+                    className="w-full p-2.5 border border-slate-200 rounded-xl disabled:bg-slate-100"
+                  />
+                </div>
+
+                {editable && draftError && (
+                  <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold">{draftError}</div>
+                )}
+
+                <div className="text-[10px] text-slate-400 leading-relaxed">
+                  Tạo bởi <strong>{creator.name}</strong>{detailTask.createdAt && ` lúc ${formatTimestamp(detailTask.createdAt)}`}
+                  {detailTask.updatedBy && (<> • Cập nhật lần cuối: <strong>{updater.name}</strong>{detailTask.updatedAt && ` lúc ${formatTimestamp(detailTask.updatedAt)}`}</>)}
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                  {editable && (
+                    <button onClick={() => deleteTask(detailTask)} className="flex items-center gap-1 font-bold text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg">
+                      <Trash2 size={14} /> Xóa
+                    </button>
+                  )}
+                  <button
+                    onClick={() => duplicateTask(detailTask)} disabled={busy}
+                    title="Tạo request mới giống request này (cho việc lặp lại mỗi Period)"
+                    className="flex items-center gap-1 font-bold text-[#007A86] hover:bg-teal-50 px-3 py-2 rounded-lg disabled:opacity-50"
+                  >
+                    <Copy size={14} /> Nhân bản
+                  </button>
+                  <div className="flex-1" />
+                  <button onClick={closeDetail} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold">
+                    {isDirty ? 'Hủy' : 'Đóng'}
+                  </button>
+                  {editable && (
+                    <button
+                      onClick={saveDetail} disabled={!isDirty || !!draftError || busy}
+                      className="px-4 py-2 rounded-xl bg-[#004A52] text-white font-bold flex items-center gap-1 disabled:opacity-40"
+                    >
+                      <Save size={13} /> Lưu thay đổi
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ==================== MODAL: ĐỔI MẬT KHẨU ==================== */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setShowPasswordModal(false); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-[#004A52] text-white p-4 flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2"><KeyRound size={16} className="text-[#FFD61F]" /> Đổi mật khẩu</h3>
+              <button onClick={() => setShowPasswordModal(false)} className="p-1 hover:bg-white/10 rounded-lg"><X size={16} /></button>
+            </div>
+            <form onSubmit={handleChangePassword} className="p-5 space-y-3 text-xs">
+              <div className="text-slate-500">Email: <strong className="text-slate-800">{authUser.email}</strong></div>
+              {passForm.error && <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold">{passForm.error}</div>}
+              {[['oldPass', 'Mật khẩu hiện tại', 'current-password'], ['newPass', 'Mật khẩu mới (tối thiểu 6 ký tự)', 'new-password'], ['confirmPass', 'Nhập lại mật khẩu mới', 'new-password']].map(([k, label, ac]) => (
+                <div key={k}>
+                  <label className="font-bold text-slate-700 block mb-1">{label} *</label>
+                  <input
+                    type="password" required autoComplete={ac} value={passForm[k]}
+                    onChange={(e) => setPassForm({ ...passForm, [k]: e.target.value, error: '' })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                  />
+                </div>
+              ))}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setShowPasswordModal(false)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold">Hủy</button>
+                <button type="submit" disabled={busy} className="px-4 py-2 rounded-xl bg-[#004A52] text-white font-bold disabled:opacity-50">Lưu mật khẩu</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && showAudit && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setShowAudit(false); }}>
+        <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-4xl max-h-[85vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4 border-b pb-3">
+            <div><h2 className="font-extrabold text-lg text-[#004A52]">Lịch sử thay đổi</h2>
+              <p className="text-xs text-slate-500">Nhật ký thao tác trên Project và Request, chỉ Admin được xem.</p></div>
+            <button aria-label="Đóng lịch sử thay đổi" onClick={() => setShowAudit(false)} className="p-2 rounded-lg hover:bg-slate-100"><X size={18}/></button>
+          </div>
+          {auditLogs.length === 0 && <p className="text-sm text-slate-500 py-8 text-center">Chưa có lịch sử thay đổi.</p>}
+          <div className="space-y-2">
+            {[...auditLogs].sort((a,b)=>(b.at?.seconds||0)-(a.at?.seconds||0)).slice(0,300).map(log => {
+              const changed = auditChanges(log);
+              const who = usersById[log.actorId]?.name || 'Tài khoản không còn trong danh sách';
+              return <div key={log.id} className="border border-slate-200 rounded-xl p-3 text-xs bg-white hover:bg-slate-50/50">
+                <div className="flex flex-wrap gap-2 items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-[#004A52] bg-teal-50 rounded-md px-2 py-1">{auditActions[log.action] || 'Thao tác'}</span>
+                    <span className="font-bold text-slate-800">{auditSubject(log)}</span>
+                  </div>
+                  <time className="text-slate-500">{log.at?.toDate?.().toLocaleString('vi-VN') || 'Không rõ thời gian'}</time>
+                </div>
+                <div className="text-slate-600 mt-1">Người thực hiện: <strong>{who}</strong></div>
+                {changed.length > 0 ? <details className="mt-2 rounded-lg bg-slate-50 p-2">
+                  <summary className="cursor-pointer font-bold text-[#007A86]">Xem {changed.length} nội dung thay đổi</summary>
+                  <div className="mt-2 space-y-1.5">
+                    {changed.map(c => <div key={c.label} className="grid grid-cols-[130px_1fr] gap-2 border-t border-slate-200 pt-1.5">
+                      <span className="font-bold text-slate-600">{c.label}</span>
+                      <span className="break-words">{c.hasBefore ? <><span className="text-slate-500">{c.from}</span><span className="text-slate-400 mx-2">→</span></> : null}<strong className="text-[#004A52]">{c.to}</strong></span>
+                    </div>)}
+                  </div>
+                </details> : <p className="mt-2 text-slate-400 italic">{log.action === 'RESTORE' ? 'Đã nhập lại dữ liệu từ file Backup.' : log.action === 'CREATE' ? 'Đã tạo bản ghi mới.' : log.action === 'DELETE' ? 'Đã xóa bản ghi.' : 'Bản ghi cũ không có chi tiết thay đổi để hiển thị.'}</p>}
+              </div>;
+            })}
+          </div>
+        </div>
+      </div>}
+      {/* ==================== MODAL: TẠO / SỬA DỰ ÁN ==================== */}
+      {projectModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setProjectModal(null); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+            <div className="bg-[#004A52] text-white p-5 flex items-center justify-between">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <Calendar size={18} className="text-[#FFD61F]" />
+                {projectModal.mode === 'create' ? 'Tạo Dự Án Mới' : 'Chỉnh Sửa Dự Án & Lịch Panel'}
+              </h3>
+              <button onClick={() => setProjectModal(null)} className="p-1.5 hover:bg-white/10 rounded-lg"><X size={18} /></button>
+            </div>
+            <form onSubmit={handleSaveProject} className="p-6 space-y-4 text-xs max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-4 gap-2.5">
+                <div className="col-span-2">
+                  <label className="font-bold text-slate-700 block mb-1">Tên Dự Án *</label>
+                  <input
+                    type="text" autoFocus value={projectModal.name}
+                    onChange={(e) => setProjectModal({ ...projectModal, name: e.target.value, error: '' })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Mã Dự Án</label>
+                  <input
+                    type="text" value={projectModal.code} placeholder="VD: QMob-VN-01"
+                    onChange={(e) => setProjectModal({ ...projectModal, code: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Thị trường</label>
+                  <input
+                    type="text" list="market-list" value={projectModal.market} placeholder="VD: Vietnam"
+                    onChange={(e) => setProjectModal({ ...projectModal, market: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                  />
+                  <datalist id="market-list">{MARKETS.map((m) => <option key={m} value={m} />)}</datalist>
+                </div>
+              </div>
+
+              <div className="bg-[#FFF9E6] p-3.5 rounded-xl border border-amber-200">
+                <label className="font-bold text-slate-800 block mb-1">Start Date *</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="date" value={projectModal.startDate}
+                    onChange={(e) => setProjectModal({ ...projectModal, startDate: e.target.value, error: '' })}
+                    className="w-48 px-3 py-2 border border-slate-300 rounded-xl bg-white font-extrabold text-[#991B1B]"
+                  />
+                  {projectModal.startDate && (
+                    <span className="text-[11px] text-slate-600">{DAY_NAMES_VN[getDayOfWeek(projectModal.startDate)]}, {formatFullVNDate(projectModal.startDate)}</span>
+                  )}
+                </div>
+                {projectModal.startDate && isWeekendIso(projectModal.startDate) ? (
+                  <p className="text-[11px] text-amber-700 font-semibold mt-1.5">
+                    ⚠ Ngày bạn chọn là cuối tuần. Lịch sẽ bắt đầu từ {DAY_NAMES_VN[getDayOfWeek(nextWorkingDay(projectModal.startDate))]}, {formatFullVNDate(nextWorkingDay(projectModal.startDate))}.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 mt-1.5">Hệ thống tự chia <strong>{projectModal.weekCodes.length} week × 5 ngày làm việc</strong> từ ngày này (bỏ qua Thứ Bảy, Chủ Nhật).</p>
+                )}
+              </div>
+
+              <div>
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <div className="font-bold mb-2">Người tham gia Project</div>
+                  <div className="text-slate-500 text-[11px] mb-2">Người tạo luôn được tham gia. User được giao Request cũng xuất hiện trong My Projects.</div>
+                  <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                    {activeUsers.map(u => <label key={u.id} className="flex items-center gap-2 text-xs">
+                      <input type="checkbox" disabled={u.id === me.id} checked={u.id === me.id || (projectModal.memberIds || []).includes(u.id)}
+                        onChange={e => setProjectModal(m => ({...m, memberIds: e.target.checked ? [...(m.memberIds || []),u.id] : (m.memberIds || []).filter(id => id !== u.id)}))}/>{u.name}
+                    </label>)}
+                  </div>
+                </div>
+                <label className="font-bold text-slate-700 block mb-1.5">Mã P%W% & Tên Phase cho {projectModal.weekCodes.length} week *</label>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-slate-100 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                    <div className="col-span-1">Week</div>
+                    <div className="col-span-4">Ngày (tự động)</div>
+                    <div className="col-span-3">Mã P%W% *</div>
+                    <div className="col-span-4">Tên Phase (không bắt buộc)</div>
+                  </div>
+                  {projectModal.weekCodes.map((_,idx) => {
+                    const preview = buildWorkingDays(projectModal.startDate, projectModal.weekCodes.length * DAYS_PER_WEEK).slice(idx * DAYS_PER_WEEK, (idx + 1) * DAYS_PER_WEEK);
+                    const first = preview[0];
+                    const last = preview[preview.length - 1];
+                    const missing = projectModal.error && !projectModal.weekCodes[idx].trim();
+                    return (
+                      <div key={idx} className="grid grid-cols-12 gap-2 px-3 py-2.5 items-center border-t border-slate-100">
+                        <div className="col-span-1">
+                          <span className="inline-flex w-6 h-6 items-center justify-center rounded-lg bg-[#004A52] text-white font-extrabold text-[11px]">{idx + 1}</span>
+                        </div>
+                        <div className="col-span-4 text-[11px] leading-tight">
+                          {first ? (
+                            <>
+                              <div className="font-bold text-slate-800">{DAY_NAMES[getDayOfWeek(first)]} {formatShortDate(first)} → {DAY_NAMES[getDayOfWeek(last)]} {formatShortDate(last)}</div>
+                              <div className="text-[10px] text-slate-400">{preview.map(formatShortDate).join(' · ')}</div>
+                            </>
+                          ) : <span className="text-slate-400">Chọn Start Date</span>}
+                        </div>
+                        <div className="col-span-3">
+                          <input
+                            type="text" value={projectModal.weekCodes[idx]} placeholder="VD: P11W3"
+                            onChange={(e) => updateModalArray('weekCodes', idx, e.target.value.toUpperCase())}
+                            className={`w-full px-2.5 py-1.5 border rounded-lg font-extrabold text-[#004A52] uppercase ${missing ? 'border-red-400 bg-red-50' : 'border-slate-300'}`}
+                          />
+                        </div>
+                        <div className="col-span-4">
+                          <input
+                            type="text" value={projectModal.weekSubtitles[idx]} placeholder="VD: Data & AI"
+                            onChange={(e) => updateModalArray('weekSubtitles', idx, e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg font-semibold"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2 mt-3 mb-2">
+                  <button type="button" onClick={addWeek} className="rounded-lg bg-teal-50 border border-teal-200 px-3 py-2 font-bold">+ Thêm Week</button>
+                  {projectModal.weekCodes.length > 4 && <button type="button" onClick={removeWeek} className="rounded-lg border border-red-200 px-3 py-2 text-red-600">Xóa Week cuối</button>}
+                </div>
+                <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200">
+                  <div className="px-3 py-1 bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wide">Xem trước tiêu đề lịch</div>
+                  <div className="flex overflow-x-auto bg-[#138A9C] text-white text-[11px] font-extrabold">
+                    {projectModal.weekCodes.map((_,idx) => {
+                      const code = projectModal.weekCodes[idx].trim().toUpperCase();
+                      const sub = projectModal.weekSubtitles[idx].trim();
+                      const label = getWeekLabel(code, idx);
+                      return (
+                        <div key={idx} style={{minWidth: 120, flex: 1}} className={`px-2 py-2 text-center border-r border-white/25 truncate ${code ? '' : 'italic text-white/60'}`}>
+                          {sub ? `${label} (${sub})` : label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1.5">Nhập mã dạng <strong>P11W3</strong> để bộ lọc Period hoạt động đúng. Tên Phase để trống thì chỉ hiện mã P%W%.</p>
+              </div>
+
+              {projectModal.error && <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold">{projectModal.error}</div>}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button type="button" onClick={() => setProjectModal(null)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold">Hủy</button>
+                <button type="submit" disabled={busy} className="px-5 py-2 rounded-xl bg-[#004A52] text-white font-bold shadow disabled:opacity-50">
+                  {projectModal.mode === 'create' ? 'Tạo dự án' : 'Lưu thay đổi'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: TẠO REQUEST ==================== */}
+      {showTaskModal && activeProject && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setShowTaskModal(false); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="bg-[#004A52] text-white p-5 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold">Tạo Request Mới</h3>
+                <p className="text-xs text-teal-200">Dự án: {activeProject.name}</p>
+              </div>
+              <button onClick={() => setShowTaskModal(false)} className="p-1.5 hover:bg-white/10 rounded-lg"><X size={18} /></button>
+            </div>
+            <form onSubmit={handleCreateTask} className="p-6 space-y-4 text-xs max-h-[80vh] overflow-y-auto">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Tên công việc / Yêu cầu *</label>
+                <input
+                  type="text" autoFocus value={newTask.name}
+                  onChange={(e) => setNewTask({ ...newTask, name: e.target.value, error: '' })}
+                  placeholder="VD: Kiểm tra logic bảng câu hỏi..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Loại công việc</label>
+                <select value={newTask.category} onChange={(e) => setNewTask({ ...newTask, category: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-semibold">
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {[['requesterId', 'Người yêu cầu'], ['handlerId', 'Người xử lý (PIC) *']].map(([f, label]) => (
+                  <div key={f}>
+                    <label className="font-bold text-slate-700 block mb-1">{label}</label>
+                    <select value={newTask[f]} onChange={(e) => setNewTask({ ...newTask, [f]: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-bold text-[#004A52]">
+                      {activeUsers.map((u) => <option key={u.id} value={u.id}>{u.name} (Team {u.dept})</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Giai đoạn</label>
+                  <select value={newTask.stage} onChange={(e) => setNewTask({ ...newTask, stage: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white">
+                    <option value="In Progress">Đang xử lý</option>
+                    <option value="Pending Approval">Chờ Approval (Phê duyệt)</option>
+                    <option value="Need Info">Cần bổ sung thông tin</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Mức độ ưu tiên</label>
+                  <select value={newTask.priority} onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white">
+                    <option value="Normal">Bình thường</option>
+                    <option value="High">Cao (High)</option>
+                    <option value="Urgent">Khẩn cấp (Urgent)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Ngày bắt đầu *</label>
+                  <input type="date" required value={newTask.startDate} onChange={(e) => setNewTask({ ...newTask, startDate: e.target.value, error: '' })} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white" />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Deadline <span className="text-slate-400 font-normal">(có thể để trống)</span></label>
+                  <input type="date" min={newTask.startDate} value={newTask.deadlineDate} onChange={(e) => setNewTask({ ...newTask, deadlineDate: e.target.value, error: '' })} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white" />
+                </div>
+                {newTask.startDate && isWeekendIso(newTask.startDate) && <p className="col-span-2 text-[11px] text-amber-700">⚠ Ngày bắt đầu đang là cuối tuần.</p>}
+                {newTaskRangeWarning && <p className="col-span-2 text-[11px] text-amber-700">⚠ {newTaskRangeWarning}</p>}
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Ghi chú</label>
+                <textarea rows="2" value={newTask.note} onChange={(e) => setNewTask({ ...newTask, note: e.target.value })} placeholder="Mô tả ngắn, link file, yêu cầu đặc biệt..." className="w-full p-2.5 border border-slate-200 rounded-xl" />
+              </div>
+              {newTask.error && <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold">{newTask.error}</div>}
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button type="button" onClick={() => setShowTaskModal(false)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold">Hủy</button>
+                <button type="submit" disabled={busy} className="px-5 py-2 rounded-xl bg-[#004A52] text-white font-bold shadow disabled:opacity-50">Tạo Request</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: QUẢN LÝ USER (ADMIN) ==================== */}
+      {showUserModal && isAdmin && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setShowUserModal(false); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="bg-[#004A52] text-white p-5 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2"><Shield size={18} className="text-[#FFD61F]" /> Quản lý Nhân sự & Phân quyền</h3>
+                <p className="text-xs text-teal-200">
+                  {activeUsers.length} đang hoạt động • {users.length - activeUsers.length} đã khóa • {countActiveAdmins(users)} Admin
+                </p>
+              </div>
+              <button onClick={() => setShowUserModal(false)} className="p-1.5 hover:bg-white/10 rounded-lg"><X size={18} /></button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs overflow-y-auto">
+              <form onSubmit={handleAddUser} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="font-bold text-slate-700">Thêm nhân sự mới</div>
+                <div className="grid grid-cols-12 gap-2">
+                  <input type="text" value={newUser.name} onChange={(e) => { setNewUser({ ...newUser, name: e.target.value }); setUserFormError(''); }} placeholder="Họ và tên" className="col-span-3 px-3 py-2 border border-slate-200 rounded-lg bg-white" />
+                  <input type="email" value={newUser.email} onChange={(e) => { setNewUser({ ...newUser, email: e.target.value }); setUserFormError(''); }} placeholder="Email công ty" className="col-span-3 px-3 py-2 border border-slate-200 rounded-lg bg-white" />
+                  <input type="text" value={newUser.password} onChange={(e) => { setNewUser({ ...newUser, password: e.target.value }); setUserFormError(''); }} placeholder="MK khởi tạo (≥6)" autoComplete="off" className="col-span-2 px-3 py-2 border border-slate-200 rounded-lg bg-white font-bold text-[#004A52]" />
+                  <select value={newUser.dept} onChange={(e) => setNewUser({ ...newUser, dept: e.target.value })} className="col-span-1 px-1 py-2 border border-slate-200 rounded-lg bg-white font-semibold">
+                    {TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} className="col-span-1 px-1 py-2 border border-slate-200 rounded-lg bg-white font-semibold">
+                    <option value="Member">Member</option>
+                    <option value="Admin">Admin</option>
+                  </select>
+                  <button type="submit" disabled={busy} className="col-span-2 px-3 py-2 bg-[#007A86] hover:bg-[#006069] text-white font-bold rounded-lg disabled:opacity-50">+ Tạo tài khoản</button>
+                </div>
+              </form>
+
+              {userFormError && (
+                <div className="p-2.5 bg-red-50 text-red-600 rounded-lg border border-red-200 font-semibold flex items-center gap-1.5"><AlertTriangle size={13} /> {userFormError}</div>
+              )}
+
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Tìm theo tên, email hoặc team..." className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-[#007A86]" />
+              </div>
+
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-slate-100 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  <div className="col-span-4">Nhân sự</div>
+                  <div className="col-span-1">Team</div>
+                  <div className="col-span-2">Quyền</div>
+                  <div className="col-span-2 text-center">Việc đang xử lý</div>
+                  <div className="col-span-3 text-right">Thao tác</div>
+                </div>
+                <div className="divide-y divide-slate-100 max-h-[42vh] overflow-y-auto">
+                  {filteredUsers.length === 0 && <div className="p-6 text-center text-slate-400">Không tìm thấy nhân sự phù hợp.</div>}
+                  {filteredUsers.map((u) => {
+                    const isSelf = u.id === me.id;
+                    const inactive = u.active === false;
+                    const openCount = countUserOpenTasks(u.id);
+                    if (editingUser?.id === u.id) {
+                      return (
+                        <div key={u.id} className="grid grid-cols-12 gap-2 px-3 py-2.5 items-center bg-teal-50/60">
+                          <div className="col-span-4 space-y-1">
+                            <input type="text" autoFocus value={editingUser.name} onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })} className="w-full px-2 py-1 border border-slate-300 rounded-md bg-white font-bold" />
+                            <div className="text-[10px] text-slate-400 truncate" title="Email đăng nhập không đổi được trên app">{u.email} (không đổi được)</div>
+                          </div>
+                          <div className="col-span-1">
+                            <select value={editingUser.dept} onChange={(e) => setEditingUser({ ...editingUser, dept: e.target.value })} className="w-full px-1 py-1 border border-slate-300 rounded-md bg-white font-semibold">
+                              {TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-span-2">
+                            <select value={editingUser.role} onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value })} className="w-full px-1 py-1 border border-slate-300 rounded-md bg-white font-semibold">
+                              <option value="Member">Member</option>
+                              <option value="Admin">Admin</option>
+                            </select>
+                          </div>
+                          <div className="col-span-2 text-center font-bold text-slate-600">{openCount}</div>
+                          <div className="col-span-3 flex justify-end gap-1.5">
+                            <button onClick={handleSaveEditUser} disabled={busy} className="px-2.5 py-1 rounded-md bg-[#004A52] text-white font-bold flex items-center gap-1 disabled:opacity-50"><Save size={12} /> Lưu</button>
+                            <button onClick={() => { setEditingUser(null); setUserFormError(''); }} className="px-2.5 py-1 rounded-md border border-slate-300 text-slate-600 font-semibold">Hủy</button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={u.id} className={`grid grid-cols-12 gap-2 px-3 py-2.5 items-center ${inactive ? 'bg-slate-50 opacity-60' : ''}`}>
+                        <div className="col-span-4 flex items-center gap-2.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-lg font-bold flex items-center justify-center shrink-0 ${inactive ? 'bg-slate-300 text-slate-600' : 'bg-[#004A52] text-white'}`}>{u.avatar || makeInitials(u.name)}</div>
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-800 truncate flex items-center gap-1">
+                              {u.name}
+                              {isSelf && <span className="text-[9px] px-1 rounded bg-teal-100 text-teal-800">Bạn</span>}
+                              {inactive && <span className="text-[9px] px-1 rounded bg-slate-200 text-slate-600">Đã khóa</span>}
+                            </div>
+                            <div className="text-[11px] text-slate-400 truncate">{u.email}</div>
+                          </div>
+                        </div>
+                        <div className="col-span-1 font-bold text-slate-700">{u.dept}</div>
+                        <div className="col-span-2">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${u.role === 'Admin' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{u.role}</span>
+                        </div>
+                        <div className="col-span-2 text-center">
+                          <span className={`font-extrabold ${openCount > 5 ? 'text-red-600' : 'text-slate-700'}`} title="Số request chưa hoàn thành đang giao cho người này">{openCount}</span>
+                        </div>
+                        <div className="col-span-3 flex justify-end gap-1">
+                          <button onClick={() => { setUserFormError(''); setEditingUser({ id: u.id, name: u.name, dept: u.dept, role: u.role }); }} title="Sửa tên, team, quyền" className="p-1.5 rounded-md hover:bg-teal-50 text-slate-500 hover:text-[#007A86]"><Edit3 size={13} /></button>
+                          <button onClick={() => handleAdminResetPassword(u)} title="Gửi email đặt lại mật khẩu" className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800"><KeyRound size={13} /></button>
+                          <button onClick={() => handleToggleUserActive(u)} disabled={isSelf} title={inactive ? 'Mở khóa' : 'Khóa (nghỉ việc / chuyển bộ phận) – giữ lịch sử'} className="p-1.5 rounded-md hover:bg-amber-50 text-slate-500 hover:text-amber-700 disabled:opacity-25 disabled:cursor-not-allowed">
+                            {inactive ? <UserCheck size={13} /> : <UserX size={13} />}
+                          </button>
+                          <button onClick={() => openDeleteUser(u)} disabled={isSelf} title="Xóa" className="p-1.5 rounded-md hover:bg-red-50 text-slate-500 hover:text-red-600 disabled:opacity-25 disabled:cursor-not-allowed"><Trash2 size={13} /></button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Nhân sự nghỉ việc nên dùng <strong>Khóa</strong> thay vì Xóa để giữ lịch sử. Nút <KeyRound size={10} className="inline" /> gửi email đặt lại mật khẩu đến chính nhân viên đó.
+              </p>
+            </div>
+          </div>
+
+          {deleteUserData && (
+            <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setDeleteUserData(null); }}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 space-y-3 text-xs">
+                <h4 className="text-sm font-extrabold text-red-600 flex items-center gap-2"><Trash2 size={16} /> Xóa tài khoản {deleteUserData.user.name}?</h4>
+                {deleteUserData.taskCount > 0 ? (
+                  <>
+                    <p className="text-slate-600">Người này liên quan đến <strong>{deleteUserData.taskCount} request</strong>. Chọn người nhận lại:</p>
+                    <select value={deleteUserData.reassignTo} onChange={(e) => setDeleteUserData({ ...deleteUserData, reassignTo: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-bold">
+                      {activeUsers.filter((x) => x.id !== deleteUserData.user.id).map((x) => <option key={x.id} value={x.id}>{x.name} (Team {x.dept})</option>)}
+                    </select>
+                  </>
+                ) : <p className="text-slate-600">Người này không liên quan đến request nào.</p>}
+                <p className="text-[11px] text-slate-400">Không thể hoàn tác. Tài khoản đăng nhập Firebase vẫn còn nhưng sẽ không truy cập được; muốn xóa hẳn, vào Firebase Console &gt; Authentication.</p>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button onClick={() => setDeleteUserData(null)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold">Hủy</button>
+                  <button onClick={handleConfirmDeleteUser} disabled={busy || (deleteUserData.taskCount > 0 && !deleteUserData.reassignTo)} className="px-4 py-2 rounded-xl bg-red-600 text-white font-bold disabled:opacity-40">Xóa tài khoản</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================== THÔNG BÁO ==================== */}
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-[70] bg-slate-900 text-white px-4 py-3.5 rounded-2xl shadow-2xl border border-slate-700 flex items-start gap-3 max-w-sm">
+          <div className={`p-2 rounded-xl shrink-0 ${toast.type === 'error' ? 'bg-red-600' : toast.type === 'success' ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
+            {toast.type === 'error' ? <AlertTriangle size={16} /> : <Bell size={16} />}
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-extrabold text-slate-100">{toast.title}</div>
+            {toast.message && <div className="text-xs text-slate-300 mt-0.5">{toast.message}</div>}
+          </div>
+          <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white shrink-0"><X size={14} /></button>
+        </div>
+      )}
+
+      {busy && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[80] bg-white border border-slate-200 shadow-lg rounded-full px-3 py-1.5 text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+          <Loader2 size={12} className="animate-spin text-[#007A86]" /> Đang lưu...
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// KHỞI CHẠY ỨNG DỤNG
+// =====================================================================
+createRoot(document.getElementById('root')).render(<App />);
+
+  </script>
+</body>
+</html>
